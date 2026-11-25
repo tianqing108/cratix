@@ -61,6 +61,37 @@ def collect():
     }
 
 
+def collect_package(root: Path, display: str):
+    """**真实第三方包**的体检 ✅（比标准库更接近用户代码 ✅）。"""
+    total = ok = module_fallback = crashes = aot = fallback = 0
+    reasons = collections.Counter()
+    for path in sorted(Path(root).rglob("*.py")):
+        rel = path.relative_to(Path(root).parent)
+        name = str(rel.with_suffix("")).replace(chr(92), ".").replace("/", ".")
+        total += 1
+        try:
+            mc = driver.compile_module(path, name)
+        except Exception as exc:  # noqa: BLE001
+            crashes += 1
+            reasons["崩溃：" + type(exc).__name__] += 1
+            continue
+        if not mc.module_ok:
+            module_fallback += 1
+            reasons["模块级：" + mc.module_reason.split(chr(65288))[0].strip()[:40]] += 1
+            continue
+        ok += 1
+        aot += len(mc.supported_names)
+        fallback += len(mc.fallback_names)
+        for plan in mc.plans:
+            if not plan.supported:
+                reasons[plan.reason.split(chr(65288))[0].strip()[:40]] += 1
+    return {
+        "name": display, "total": total, "ok": ok,
+        "module_fallback": module_fallback, "crashes": crashes,
+        "aot": aot, "fallback": fallback, "reasons": reasons,
+    }
+
+
 def render(data) -> str:
     total = data["total"]
     func_total = data["aot"] + data["fallback"]
@@ -105,6 +136,30 @@ def render(data) -> str:
     for count, rel in data["with_fallback"]:
         lines.append("| " + str(count) + " | " + rel + " |")
     lines.append("")
+    third = data.get("third_party")
+    if third:
+        ft = third["aot"] + third["fallback"]
+        three_ratio = (third["aot"] / ft) if ft else 0.0
+        lines.append("## 真实第三方包：" + third["name"] + " ✅")
+        lines.append("")
+        lines.append("> 标准库再好也只是「考试」✅ —— 这段是**真实项目**的体检 ✅（同一套编译器 ✅ 没有特调 ✅）。")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("| --- | --- |")
+        lines.append("| 模块 | " + str(third["total"]) + " |")
+        lines.append("| 编译成功 | **" + str(third["ok"]) + "** |")
+        lines.append("| 模块级回退 | " + str(third["module_fallback"]) + " |")
+        lines.append("| **崩溃** | **" + str(third["crashes"]) + "** |")
+        lines.append("| **函数 AOT** | **" + str(third["aot"]) + "** |")
+        lines.append("| 函数回退 | " + str(third["fallback"]) + " |")
+        lines.append("| AOT 比例 | **" + format(three_ratio, ".3f") + "** |")
+        lines.append("")
+        if third["reasons"]:
+            lines.append("| 次数 | 回退原因 |")
+            lines.append("| --- | --- |")
+            for reason, count in third["reasons"].most_common(8):
+                lines.append("| " + str(count) + " | " + reason.replace("|", "/") + " |")
+            lines.append("")
     lines.append("## 这些回退意味着什么 ✅")
     lines.append("")
     lines.append("- **回退 ≠ 错误** ✅：回退的函数**照常能跑** ✅（用源码 exec ✅，速度与 .pyc 相当 ✅），")
@@ -116,8 +171,21 @@ def render(data) -> str:
     return chr(10).join(lines) + chr(10)
 
 
+def _third_party():
+    """有就测 ✅ 没有就跳过 ✅（报告要能在任何机器上生成 ✅）。"""
+    try:
+        import pip  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return None
+    root = Path(pip.__file__).resolve().parent
+    if not root.is_dir():
+        return None
+    return collect_package(root, "pip")
+
+
 def main() -> int:
     data = collect()
+    data["third_party"] = _third_party()
     text = render(data)
     if "--write" in sys.argv:
         out = ROOT / "docs" / "aot-coverage.md"
