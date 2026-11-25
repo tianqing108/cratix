@@ -1096,8 +1096,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         }
         # **类体里遇到不支持的东西** ✅ -> 只把这个类降级成源码 exec ✅（不能拖垮整个模块 ✅）
         class_broken = ""
+        # **类里的重名方法** ✅（`@property` + `@x.setter` 就是两次 `def x` ✅）——
+        # 我们按方法名生成 C 函数名 ✅ -> 两个同名方法会**重复定义** ✅（实测：
+        # `pip._vendor.rich.console` 的 `Console.width` ✅ -> `C2084 函数已有主体` ✅）。
+        # 正确语义是"**后定义的覆盖前一个**" ✅，但我们还要在**装饰器应用时**看到前一个对象 ✅
+        # （`@width.setter` 依赖它 ✅）—— 复杂度不值得 ✅ -> **这个类整体降级成源码 exec** ✅。
+        seen_method_names: set = set()
         for item in stmt.body:
             if isinstance(item, ast.FunctionDef):
+                if item.name in seen_method_names:
+                    class_broken = "类里有重名方法：" + item.name
+                    break
+                seen_method_names.add(item.name)
                 if item.decorator_list:
                     segments = [seg for seg in (_decorator_segment(source, d) for d in item.decorator_list) if seg]
                     if segments:
@@ -1179,6 +1189,10 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
             elif isinstance(item, ast.AsyncFunctionDef):
+                if item.name in seen_method_names:
+                    class_broken = "类里有重名方法：" + item.name
+                    break
+                seen_method_names.add(item.name)
                 # **`async` 方法** ✅ —— 编译不了 ✅ 但可以**只回退它自己** ✅（挂到类上 ✅）。
                 result.plans.append(FunctionPlan(item.name, False, "async 方法（回退成源码 ✅）"))
                 segment = _source_segment(source, item, dedent=True)

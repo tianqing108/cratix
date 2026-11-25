@@ -94,6 +94,16 @@ def c_bytes_literal_bytes(data: bytes) -> str:
     return "".join(out)
 
 
+def _chunked_literal(data: bytes, size: int = 4096) -> str:
+    """**超长字符串要切成多段** ✅ —— MSVC 有 `C2026: 字符串太大` ✅（一个字符串字面量 ~64KB 上限 ✅）。
+    C 里相邻字面量会**自动拼接** ✅ -> `"abc" "def"` 等价于 `"abcdef"` ✅，语义完全不变 ✅。
+    """
+    if len(data) <= size:
+        return c_bytes_literal_bytes(data)
+    parts = [c_bytes_literal_bytes(data[i:i + size]) for i in range(0, len(data), size)]
+    return "(" + " ".join(parts) + ")"
+
+
 def py_str_expr(text: str) -> str:
     """Python 字符串 -> 建对象的 C 表达式 ✅（新引用 ✅）。
 
@@ -105,8 +115,8 @@ def py_str_expr(text: str) -> str:
         data = text.encode("utf-8")
     except UnicodeEncodeError:
         raw = text.encode("utf-8", "surrogatepass")
-        return "PyUnicode_DecodeUTF8(" + c_bytes_literal_bytes(raw) + ", " + str(len(raw)) + ", \"surrogatepass\")"
-    return "PyUnicode_FromString(" + c_bytes_literal_bytes(data) + ")"
+        return "PyUnicode_DecodeUTF8(" + _chunked_literal(raw) + ", " + str(len(raw)) + ", \"surrogatepass\")"
+    return "PyUnicode_DecodeUTF8(" + _chunked_literal(data) + ", " + str(len(data)) + ", NULL)"
 
 
 def c_string(text: str) -> str:
@@ -114,6 +124,10 @@ def c_string(text: str) -> str:
 
     **用八进制转义** ✅（\\NNN ✅）而不是 \\xNN ✅ —— 后者后面紧跟十六进制字符时会歧义 ✅。
     """
+    # **超长字符串要切段** ✅（`C2026: 字符串太大` ✅ —— MSVC 对单个字面量有上限 ✅）；
+    # 相邻字面量自动拼接 ✅，语义不变 ✅。（回退函数的整段源码就走这条路 ✅）
+    if len(text) > 4096:
+        return _chunked_literal(text.encode("utf-8", "surrogatepass"))
     out = ["\""]
     for byte in text.encode("utf-8"):
         if byte == 0x5C:
@@ -1170,6 +1184,23 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     for cls_name, maker_lines, needs_label in class_makers:
         out.append("")
         out.append("static int cratix_make_" + c_ident(cls_name) + "(void) {")
+        # **类创建函数里用到的 interned 属性名要在这里声明** ✅ ——
+        # 它们是 `static` **函数内**变量 ✅，声明在别的函数里这个函数看不见 ✅
+        # （实测：`cratix_an_v_local` 未声明 ✅）。初始化仍是"用前检查" ✅（幂等 ✅）。
+        _attrs = set()
+        for _line in maker_lines:
+            _pos = 0
+            while True:
+                _idx = _line.find("cratix_an_", _pos)
+                if _idx < 0:
+                    break
+                _end = _idx
+                while _end < len(_line) and (_line[_end].isalnum() or _line[_end] == "_"):
+                    _end += 1
+                _attrs.add(_line[_idx:_end])
+                _pos = _end
+        for _ref in sorted(_attrs):
+            out.append("    static PyObject *" + _ref + " = NULL;")
         out.extend(maker_lines)
         out.append("    return 0;")
         if needs_label:
