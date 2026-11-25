@@ -606,6 +606,8 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     inner_gens: list = []
     inner_sites: dict = {}
     inner_cells: dict = {}
+    # **被内层 `nonlocal` 写过的名字** ✅（外层只住 cell 字典 ✅）
+    inner_written: dict = {}
     # **模块级控制流里的 def 节点** ✅（它们的体里还可能再嵌套 ✅ —— 扫描要用 ✅）
     mdef_nodes: list = []
     # **扫描"谁里面可能有嵌套 def"** ✅ —— 顶层函数 ✅ 类方法 ✅
@@ -632,7 +634,13 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     continue
                 # **`nonlocal` 写回** ✅ / 更深嵌套 ✅ -> 暂不支持 ✅（回退 ✅ 语义仍对 ✅）
                 writes = {sub.id for sub in ast.walk(child) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)}
-                if (writes & captured) or any(
+                # **`nonlocal` 写回** ✅：内层会改外层变量 ✅ -> 这些名字在外层必须
+                # **只住 cell 字典** ✅（否则外层读到的是**过期副本** ✅）。照常登记 ✅，
+                # 并记下"被内层写过"的名字 ✅（外层生成时传 `cells_only` ✅）。
+                written_back = writes & captured
+                if written_back:
+                    inner_written.setdefault(func_node.name, set()).update(written_back)
+                if any(
                     isinstance(sub, ast.FunctionDef) and sub is not child
                     for sub in ast.walk(child)
                 ):
@@ -887,14 +895,13 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             continue
         scope = analyze_function(stmt, module_globals)
         try:
-            # **`nonlocal` 只读** ✅ 可以（读走 cell ✅）；**写回**不行 ✅ -> 明确回退 ✅
-            if scope.nonlocals_:
-                writes = {
-                    sub.id for sub in ast.walk(stmt)
-                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
-                }
-                if writes & scope.nonlocals_:
-                    raise Unsupported("nonlocal 写回")
+            # **`nonlocal` 写回** ✅ 现在支持了 ✅（内层写 cell ✅、外层只住 cell 字典 ✅）——
+            # 这里只拦"**本函数自己**声明了 nonlocal 又自己写"的怪情况 ✅（那说明它是嵌套函数 ✅）。
+            # **不能扫整棵子树** ✅：内层 def 的写回是正常的 ✅（以前扫子树 -> 外层被误判回退 ✅ 实测 ✅）。
+            # **不要在这里判 `nonlocal` 写回** ✅ —— `scope.nonlocals_` 会**扫到嵌套 def** ✅，
+            # 从而把**外层**函数误判成"自己写了 nonlocal" ✅（实测 ✅）。
+            # 真正的语义由 cell 字典保证 ✅（内层写 ✅、外层只读字典 ✅）；非法的 `nonlocal`
+            # 本来就过不了 `ast.parse`/编译 ✅。
             # **模块级函数没有外层作用域** ✅ -> 它读到的"自由名"**只可能是全局** ✅
             # （以前把这些名字当成"闭包捕获" ✅ -> 整个函数回退 ✅ —— 实测 `calendar.py` 的
             #  `FEBRUARY`（`globals().update(...)` 动态绑定 ✅）就中招 ✅）
@@ -919,6 +926,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 lambda_names=lambda_names,
                 lambda_captures=lambda_captures,
                 cell_names=inner_cells.get(stmt.name, set()),
+                cells_only=inner_written.get(stmt.name, set()),
                 inner_sites=inner_sites,
                 genexp_captures=genexp_captures,
             )
@@ -1070,6 +1078,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                         lambda_names=lambda_names,
                         lambda_captures=lambda_captures,
                         cell_names=inner_cells.get(item.name, set()),
+                    cells_only=inner_written.get(stmt.name, set()),
                         inner_sites=inner_sites,
                         genexp_captures=genexp_captures,
                         # **类方法里的相对导入** ✅ 也要有包名 ✅

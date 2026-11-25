@@ -1212,7 +1212,8 @@ class FunctionGen:
                  class_methods=None, self_attr_writes=None, method_mode=False,
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
                  cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
-                 genexp_captures=None, deleted_locals=None, mdef_names=None):
+                 genexp_captures=None, deleted_locals=None, mdef_names=None,
+                 cells_only=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -1225,6 +1226,10 @@ class FunctionGen:
         # **生成器表达式的捕获表** ✅（(行, 列) -> 捕获的名字 ✅）
         self.genexp_captures = dict(genexp_captures or {})
         self.closure_names = set(closure_names or ())
+        # **只住 cell 字典的名字** ✅（被内层 `nonlocal` 写过 ✅）—— 读/写都走字典 ✅
+        self.cells_only: set = set(cells_only or ())
+        # **只住 cell 字典的名字** ✅（被内层 `nonlocal` 写过 ✅）—— 外层读/写都要走字典 ✅
+        self.cells_only: set = set(cells_only or ())
         self.cells_var = ""
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
@@ -1693,6 +1698,10 @@ class FunctionGen:
         **函数里的 import 必须绑定局部** ✅ —— 以前一律写 globals ✅ ->
         局部变量永远是 NULL ✅ -> 用到就崩 ✅（实测：访问违例 ✅）。
         """
+        if name in self.cells_only and self.cells_var:
+            # **只住 cell 字典** ✅ —— 内层 `nonlocal` 写回后外层也要看见新值 ✅
+            self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", " + value_var + ") < 0) goto cratix_error;")
+            return
         if name in self.scope.locals_ and name not in self.global_names:
             var = self.local_var(name)
             self.emit("Py_XDECREF(" + var + ");")
@@ -2760,7 +2769,7 @@ class FunctionGen:
                 self.emit(t + " = " + comp_var + ";")
                 self.emit("Py_XINCREF(" + t + ");")
                 return t
-            if name in self.closure_names:
+            if name in self.closure_names or name in self.cells_only:
                 # **闭包自由变量** ✅ —— 从 cell 字典读 ✅（晚绑定 ✅）
                 cells = self.local_var("_cratix_cells")
                 self.emit(t + " = PyDict_GetItemString(" + cells + ", " + c_string(name) + ");")
