@@ -1097,10 +1097,13 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     # **只回退这个方法** ✅（挂到类上 ✅ —— 不再拖累整个类 ✅）。
                     # **dunder 不行** ✅：槽位类的 `__init__`/`__getattr__` 等由 `tp_*` 槽调用 ✅，
                     # 挂个 Python 函数进去也不会被调到 ✅ -> 那些一律整类回退 ✅。
-                    if segment and not (item.name.startswith("__") and item.name.endswith("__")):
+                    is_dunder = item.name.startswith("__") and item.name.endswith("__")
+                    # **槽位类**（无基类 ✅）的 dunder 由 `tp_*` 槽调用 ✅ -> 挂 Python 函数不会被调到 ✅；
+                    # **继承类**（`type(...)` 建的 ✅）的 dunder 走普通属性查找 ✅ -> 单独回退**可以工作** ✅。
+                    if segment and (inherited or not is_dunder):
                         class_info["fallback_methods"].append((item.name, segment, item.lineno))
                     elif segment:
-                        class_broken = "类方法回退：" + item.name + "（dunder）"
+                        class_broken = "类方法回退：" + item.name + "（槽位类的 dunder）"
                         break
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）

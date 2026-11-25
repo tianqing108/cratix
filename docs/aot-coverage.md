@@ -1,7 +1,7 @@
 # AOT 覆盖率报告 ✅（自动生成 ✅）
 
 > 由 `scripts/coverage_report.py` 生成 ✅ —— 扫的是**本机标准库** ✅，不是抽样 ✅。
-> 时间 ✅：2026-11-26 05:18
+> 时间 ✅：2026-11-26 05:44
 > Python ✅：3.14.7（cpython-314）
 
 ## 总览
@@ -12,26 +12,26 @@
 | **编译成功模块** | **633** |
 | 模块级回退 | 9 |
 | **崩溃** | **0** |
-| **函数 AOT** | **14111** |
-| 函数回退 | 425 |
+| **函数 AOT** | **14173** |
+| 函数回退 | 419 |
 | AOT 比例 | **0.971** |
 
 ## 函数级回退原因（top 12）
 
 | 次数 | 原因 |
 | --- | --- |
-| 181 | 生成器 |
+| 184 | 生成器 |
 | 132 | async 方法 |
 | 28 | yield |
 | 16 | 类定义带关键字参数 |
 | 13 | 嵌套定义 |
 | 12 | 类属性赋值目标不是简单名字 |
-| 10 | 类方法回退：__iter__ |
 | 6 | 表达式类型：YieldFrom |
+| 5 | 类方法回退：__iter__ |
 | 5 | async 函数 |
 | 4 | match 模式：MatchMapping |
 | 3 | match 模式：MatchClass |
-| 3 | 类方法回退：__reversed__ |
+| 3 | try 的 handler 过多 |
 
 ## 模块级回退原因（top 12）
 
@@ -51,17 +51,17 @@
 | 29 | asyncio/base_events.py |
 | 26 | xml/etree/ElementPath.py |
 | 15 | difflib.py |
-| 15 | contextlib.py |
 | 15 | asyncio/locks.py |
+| 14 | contextlib.py |
 | 12 | traceback.py |
 | 11 | pdb.py |
 | 10 | glob.py |
 | 10 | asyncio/selector_events.py |
 | 10 | asyncio/proactor_events.py |
-| 8 | collections/__init__.py |
+| 8 | ipaddress.py |
 | 7 | xml/etree/ElementTree.py |
 | 7 | weakref.py |
-| 7 | ipaddress.py |
+| 7 | calendar.py |
 
 ## 这些回退意味着什么 ✅
 
