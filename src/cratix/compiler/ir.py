@@ -32,7 +32,8 @@ KIND_FIELDS = {
     "continue": (),
     "pass": (),
     "noop": (),                              # 声明类语句 ✅（global/nonlocal ✅）
-    "delete": ("names",),                    # del 名字 ✅（只到全局 ✅）
+    "delete": ("names", "targets"),           # del 名字/属性/下标 ✅
+    "namedexpr": ("name",),                  # 海象运算符 ✅ kids: [value] ✅
     "raise": (),                             # kids: [exc|None, cause|None]
     "assert": (),                            # kids: [test, msg|None]
     "try": ("body", "handlers", "orelse", "finalbody"),

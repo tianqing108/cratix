@@ -700,14 +700,14 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         # 创建走 `type(name, (Base,), ns)` ✅（这样 `slot_tp_init` 才会调我们的 `__init__` ✅）。
         inherited = bool(stmt.bases) or bool(getattr(stmt, "keywords", None))
         # **基类表达式里的名字要 intern** ✅（`cratix_key_v_Exception` ✅ —— 生成基类表达式时要用 ✅）
-        if stmt.bases:
-            for sub in ast.walk(stmt.bases[0]):
+        for base in stmt.bases:
+            for sub in ast.walk(base):
                 if isinstance(sub, ast.Name):
                     key_names.append(sub.id)
         class_info = {
             "name": stmt.name,
             "inherited": inherited,
-            "base": builder.build_expr(stmt.bases[0]) if stmt.bases else None,
+            "bases": [builder.build_expr(base) for base in stmt.bases],
             "doc": _doc_of(stmt),
             "descriptor_methods": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）

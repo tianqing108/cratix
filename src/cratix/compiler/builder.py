@@ -127,14 +127,17 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             pairs.extend([ctx, var])
         return ir.node("with", *pairs, body=[build_stmt(s) for s in node.body])
     if isinstance(node, ast.Delete):
-        # **`del` 语句** ✅ —— 先支持"删全局名字" ✅（真实代码里常见：
-        # `try: import x finally: del x` ✅ 之类 ✅）
+        # **`del`** ✅：名字（删全局 ✅）/ 属性 ✅ / 下标 ✅ 都支持 ✅
         names = []
+        targets = []
         for target in node.targets:
-            if not isinstance(target, ast.Name):
-                raise Unsupported("del 目标不是简单名字")
-            names.append(target.id)
-        return ir.node("delete", names=names)
+            if isinstance(target, ast.Name):
+                names.append(target.id)
+            elif isinstance(target, (ast.Attribute, ast.Subscript)):
+                targets.append(build_expr(target))
+            else:
+                raise Unsupported("del 目标：" + type(target).__name__)
+        return ir.node("delete", names=names, targets=targets)
     if isinstance(node, (ast.Global, ast.Nonlocal)):
         # **`global` / `nonlocal` 声明** ✅ —— 运行期**没有动作** ✅：
         # 作用域分析已经把这些名字从"局部"里剔除 ✅ -> 赋值自然走模块字典 ✅。
@@ -361,6 +364,11 @@ def build_expr(node: ast.expr) -> ir.Node:
         return ir.node("formattedvalue", build_expr(node.value), conversion=conv, format_spec=spec)
     if isinstance(node, ast.Starred):
         return ir.node("starred", build_expr(node.value))
+    if isinstance(node, ast.NamedExpr):
+        # **海象运算符** `(x := expr)` ✅ —— 赋值并返回同一个对象 ✅
+        if not isinstance(node.target, ast.Name):
+            raise Unsupported("海象运算符目标必须是名字")
+        return ir.node("namedexpr", build_expr(node.value), name=node.target.id)
     if isinstance(node, ast.Lambda):
         # **lambda** ✅：车成模块级的**原生函数** ✅（与普通函数同一套生成 ✅），
         # 使用点只负责取到那个函数对象 ✅（见 codegen 的 "lambda" 分支 ✅）。

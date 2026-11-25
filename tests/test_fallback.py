@@ -311,6 +311,19 @@ class FunctionFallbackTest(unittest.TestCase):
         # **基类的 __init__ 真的跑过** ✅（args 由 Exception.__init__ 设 ✅）
         self.assertEqual(data["exc_args"], ["bad 9"])
 
+    def test_21_modern_syntax(self):
+        """海象 ✅ / del 属性与下标 ✅ / 多基类 ✅ / hasattr 真值 ✅。"""
+        data = run_worker("modern")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["walrus"], 6)
+        self.assertEqual(data["walrus_if"], 30)
+        # **del 真的删掉了** ✅（槽位与字典都算 ✅）
+        self.assertEqual(data["delete"], [False, True, 0])
+        # MRO 是先 Tagged ✅ -> `super().tag()` 得到 "tagged" ✅（与 CPython 一致 ✅）
+        self.assertEqual(data["multi"], ["tagged", "extra", "tagged"])
+        # **hasattr 必须返回真布尔对象** ✅（以前把 int 当指针存 ✅）
+        self.assertEqual(data["truth"], [True, False])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

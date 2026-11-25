@@ -143,6 +143,19 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_modern(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_modern.py", "cratix_corpus_modern", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "walrus": mod.walrus([1, 2, 3]),
+        "walrus_if": mod.walrus_in_if([1, 2, 3]),
+        "delete": list(mod.delete_targets()),
+        "multi": list(mod.multi_base()),
+        "truth": list(mod.hasattr_truth()),
+    }
+
+
 def op_inherit(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_inherit.py", "cratix_corpus_inherit", out_dir)
     return {
@@ -453,6 +466,8 @@ def main() -> int:
             data = op_module_level(out_dir)
         elif op == "inherit":
             data = op_inherit(out_dir)
+        elif op == "modern":
+            data = op_modern(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

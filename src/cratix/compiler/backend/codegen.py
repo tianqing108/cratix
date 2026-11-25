@@ -158,6 +158,13 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+def _name_node(name: str):
+    """临时造一个 name IR 节点 ✅（海象运算符赋值用 ✅）。"""
+    from .. import ir as _ir
+
+    return _ir.node("name", id=name)
+
+
 class _ScopeStub:
     """**最小作用域** ✅ —— 只给"生成基类表达式"用 ✅（类体里没有局部 ✅）。"""
 
@@ -518,7 +525,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **模块体 + 类创建：按源码顺序交错** ✅
     # **没有模块体也要建类** ✅（纯函数/类模块很常见 ✅ —— 以前这里把类漏掉了 ✅）
     marks = list(body_marks or [])
-    order = sorted(class_order or [])
+    # **只按位置稳定排序** ✅ —— 同一位置（前面没有模块体语句 ✅）的多个类必须保持**源码顺序** ✅
+    # （`class Both(Tagged, Other)` 的基类必须先创建 ✅ —— 按元组整体排序会变成字母序 ✅ -> NameError ✅ 实测 ✅）
+    order = sorted(class_order or [], key=lambda item: item[0])
     cursor = 0
     if True:
         if module_gen is None:
@@ -815,21 +824,34 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         # **继承的类**走 `type(name, (Base,), ns)` ✅（布局由基类决定 ✅，我们只挂方法 ✅）。
         maker_error_label = False
         if cls.get("inherited"):
-            base_ir = cls.get("base")
-            if base_ir is None:
-                out.append("        PyObject *cratix_base = (PyObject *)&PyBaseObject_Type;")
-                out.append("        Py_INCREF(cratix_base);")
+            base_irs = cls.get("bases") or []
+            base_tmps = []
+            if not base_irs:
+                out.append("        PyObject *cratix_base0 = (PyObject *)&PyBaseObject_Type;")
+                out.append("        Py_INCREF(cratix_base0);")
+                base_tmps.append("cratix_base0")
             else:
-                base_gen = FunctionGen("<class base>", None, [], _ScopeStub(), None)
-                base_tmp = base_gen.emit_expr(base_ir)
-                for tmp in base_gen.tmp_names:
-                    out.append("        PyObject *" + tmp + " = NULL;")
-                out.extend("    " + line for line in base_gen.lines)
-                maker_error_label = True
-                out.append("        PyObject *cratix_base = " + base_tmp + ";")
-                out.append("        " + base_tmp + " = NULL;")
-            out.append("        PyObject *cratix_bases = PyTuple_Pack(1, cratix_base);")
-            out.append("        Py_DECREF(cratix_base);")
+                for index, base_ir in enumerate(base_irs):
+                    base_gen = FunctionGen("<class base>", None, [], _ScopeStub(), None)
+                    base_tmp = base_gen.emit_expr(base_ir)
+                    # **每个基类的临时变量要加前缀** ✅ —— 否则多个基类都用 `cratix_t0` ✅
+                    # -> C2374 重定义 ✅（实测 ✅）
+                    prefix = "cratix_b" + str(index) + "_"
+
+                    def _renamed(text: str, _prefix=prefix) -> str:
+                        return text.replace("cratix_t", _prefix + "t").replace("cratix_h", _prefix + "h")
+
+                    for tmp in base_gen.tmp_names:
+                        out.append("        PyObject *" + _renamed(tmp) + " = NULL;")
+                    out.extend("    " + _renamed(line) for line in base_gen.lines)
+                    base_tmp = _renamed(base_tmp)
+                    maker_error_label = True
+                    out.append("        PyObject *cratix_base" + str(index) + " = " + base_tmp + ";")
+                    out.append("        " + base_tmp + " = NULL;")
+                    base_tmps.append("cratix_base" + str(index))
+            out.append("        PyObject *cratix_bases = PyTuple_Pack(" + str(len(base_tmps)) + ", " + ", ".join(base_tmps) + ");")
+            for tmp in base_tmps:
+                out.append("        Py_DECREF(" + tmp + ");")
             out.append("        if (cratix_bases == NULL) return -1;")
             out.append("        PyObject *cratix_cname = PyUnicode_FromString(" + q + cls["name"] + q + ");")
             out.append("        if (cratix_cname == NULL) { Py_DECREF(cratix_bases); return -1; }")
@@ -2056,6 +2078,18 @@ class FunctionGen:
                 if name in self.scope.locals_:
                     raise Unsupported("del 局部变量")
                 self.emit("if (PyDict_DelItemString(cratix_globals, " + c_string(name) + ") < 0) goto cratix_error;")
+            # **`del obj.attr`** ✅ / **`del d[k]`** ✅
+            for target in node.get("targets", []):
+                if target.kind == "attr":
+                    obj = self.emit_expr(target.kids[0])
+                    self.emit_attr_name(target)
+                    self.emit("if (PyObject_DelAttr(" + obj + ", " + self.attr_ref(target) + ") < 0) goto cratix_error;")
+                elif target.kind == "subscript":
+                    obj = self.emit_expr(target.kids[0])
+                    key = self.emit_expr(target.kids[1])
+                    self.emit("if (PyObject_DelItem(" + obj + ", " + key + ") < 0) goto cratix_error;")
+                else:
+                    raise Unsupported("del 目标：" + target.kind)
             return
         if kind == "funcdef":
             # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）
@@ -2214,10 +2248,16 @@ class FunctionGen:
             self.emit("if (" + t + " == NULL) goto cratix_error;")
             return True
         if name == "hasattr" and len(args) == 2:
+            # **`PyObject_HasAttrString` 返回 int** ✅（0/1 ✅）—— 直接存进 PyObject* 是**指针错误** ✅
+            # （实测：返回 (1) 当对象 ✅ -> 元组里放着非法指针 ✅ -> "returned NULL without setting an exception" ✅）
             a = self.emit_expr(args[0])
             b = self.emit_expr(args[1])
-            self.emit(t + " = PyObject_HasAttrString(" + a + ", PyUnicode_AsUTF8(" + b + "));")
-            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            self.emit("{")
+            self.emit("    const char *cratix_hname = PyUnicode_AsUTF8(" + b + ");")
+            self.emit("    if (cratix_hname == NULL) goto cratix_error;")
+            self.emit("    int cratix_has = PyObject_HasAttrString(" + a + ", cratix_hname);")
+            self.emit("    " + t + " = Py_NewRef(cratix_has ? Py_True : Py_False);")
+            self.emit("}")
             return True
         return False
 
@@ -2390,6 +2430,13 @@ class FunctionGen:
             return self.emit_expr(node.kids[0])
         if kind in ("listcomp", "setcomp", "dictcomp"):
             self.emit_comprehension(node, t, kind)
+            return t
+        if kind == "namedexpr":
+            # **海象运算符** ✅ —— 先把值算出来 ✅，再绑到名字上 ✅，返回同一个对象 ✅
+            value = self.emit_expr(node.kids[0])
+            self.emit(t + " = " + value + ";")
+            self.emit("Py_INCREF(" + t + ");")
+            self.emit_assign(_name_node(node.get("name")), value)
             return t
         if kind == "lambda":
             # **lambda 的值 = 那个原生函数对象** ✅（模块级 ✅，从模块字典里取 ✅）

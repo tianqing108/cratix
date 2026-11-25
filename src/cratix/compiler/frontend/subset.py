@@ -41,8 +41,7 @@ def check_class(node: ast.ClassDef) -> None:
     **继承** ✅：支持**单个基类** ✅（实例布局由基类决定 ✅ -> 这类类**不做属性槽位** ✅，
     创建走 `type(name, (Base,), ns)` ✅）。多基类 / metaclass 仍不支持 ⬜。
     """
-    if len(node.bases) > 1:
-        raise Unsupported("多基类继承（" + str(len(node.bases)) + " 个基类）")
+    # **多基类** ✅ 已支持 ✅（`type(name, (A, B), ns)` ✅ —— MRO 交给 CPython ✅）
     if node.keywords:
         raise Unsupported("类定义带关键字参数（metaclass 等）")
     # **类装饰器** ✅：建类之后在运行期按逆序应用 ✅（见 backend/codegen.py ✅）
@@ -77,9 +76,7 @@ def check_function(node: ast.FunctionDef, scope) -> None:
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:
             raise Unsupported(reason)
-        # **`del name`** ✅ 已支持 ✅（删全局 ✅）；`del obj.attr` / `del d[k]` 还不支持 ✅
-        if isinstance(child, ast.Delete) and not all(isinstance(t, ast.Name) for t in child.targets):
-            raise Unsupported("del 属性/下标")
+        # **`del`** ✅：名字 / 属性 / 下标都支持 ✅（见 builder ✅）
         # **嵌套 def** ✅ 已支持 ✅（cell 字典 + functools.partial ✅）；
         # 没登记的嵌套 def 会在 codegen 里被判回退 ✅（语义仍正确 ✅）。
         if isinstance(child, (ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:

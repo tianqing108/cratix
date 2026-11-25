@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：多基类 / 海象 / del / hasattr ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 104 | 多基类编译报 `C2374: cratix_t0 重定义` ✅ | 每个基类各用一个 `FunctionGen` 生成表达式 ✅，临时变量都从 `cratix_t0` 开始 ✅ | 每个基类的临时变量加**前缀** ✅（`cratix_b<i>_tN` ✅） |
+| 105 | `class Both(Tagged, Other)` 报 `NameError: name 'Tagged' is not defined` ✅ | 类的创建顺序用 `sorted(class_order)` ✅ —— 同一位置的类会退化成**字母序** ✅（Both 排到 Tagged 前面 ✅） | 只按**位置**稳定排序 ✅（同位置保持源码顺序 ✅） |
+| 106 | `hasattr(x, "y")` 放进元组/返回值时 `returned NULL without setting an exception` ✅ | 快路径把 `PyObject_HasAttrString` 的 **int 0/1** 当成 `PyObject*` 存 ✅ -> 非法指针 ✅ | 先取 int ✅，再 `Py_NewRef(has ? Py_True : Py_False)` ✅。**这个 bug 一直没被测到** ✅ |
+
 ## 追加：继承内置类 ✅
 
 | # | 现象 | 根因 | 修法 |
