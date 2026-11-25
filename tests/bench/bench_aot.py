@@ -70,6 +70,49 @@ def _time(fn, args, iters: int, repeat: int) -> float:
     return best
 
 
+def _ratio_median(src_fn, aot_fn, args, iters: int, repeat: int) -> tuple:
+    """**交替测量** ✅ 再取**中位数** ✅ —— 源码版与 AOT 版**轮流**跑 ✅。
+
+    **为什么** ✅：分开跑时 ✅，CPU 频率 / 缓存 / 后台负载的**漂移**会系统性地偏袒某一侧 ✅
+    （实测同一用例的加速比能在 1.03~1.33 之间跳 ✅）。交替跑能让漂移**同时作用在两边** ✅，
+    中位数再压掉离群点 ✅。
+
+    返回 ✅：(中位加速比 ✅, 最小加速比 ✅, 最大加速比 ✅, 中位源码耗时 ✅, 中位 AOT 耗时 ✅)
+    """
+    ratios = []
+    src_times = []
+    aot_times = []
+    for _ in range(repeat):
+        t_src = _time(src_fn, args, iters, 1)
+        t_aot = _time(aot_fn, args, iters, 1)
+        # **再做一轮"反向顺序"** ✅ —— 把"谁先跑"的偏差也抵掉 ✅
+        t_aot2 = _time(aot_fn, args, iters, 1)
+        t_src2 = _time(src_fn, args, iters, 1)
+        t_src = min(t_src, t_src2)
+        t_aot = min(t_aot, t_aot2)
+        if t_aot > 0:
+            ratios.append(t_src / t_aot)
+        src_times.append(t_src)
+        aot_times.append(t_aot)
+
+    def _median(values):
+        ordered = sorted(values)
+        if not ordered:
+            return 0.0
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+    return (
+        _median(ratios),
+        min(ratios) if ratios else 0.0,
+        max(ratios) if ratios else 0.0,
+        _median(src_times),
+        _median(aot_times),
+    )
+
+
 def main() -> int:
     """跑基准 ✅ —— 输出表格 ✅。"""
     for stream in (sys.stdout, sys.stderr):
@@ -101,12 +144,13 @@ def main() -> int:
         src_fn = getattr(sources[corpus], func)
         aot_fn = getattr(aots[corpus], func)
         # **每次调用的微秒数** ✅
-        t_src = _time(src_fn, call, iters, args.repeat) / iters * 1e6
-        t_aot = _time(aot_fn, call, iters, args.repeat) / iters * 1e6
+        speed, low, high, t_src, t_aot = _ratio_median(src_fn, aot_fn, call, iters, args.repeat)
+        t_src = t_src / iters * 1e6
+        t_aot = t_aot / iters * 1e6
         total_src += t_src
         total_aot += t_aot
-        speed = (t_src / t_aot) if t_aot > 0 else 0.0
-        print("%-28s %12.3f %12.3f %8.2fx" % (corpus + "." + func, t_src, t_aot, speed))
+        print("%-28s %12.3f %12.3f %8.2fx  [%.2f~%.2f]" % (
+            corpus + "." + func, t_src, t_aot, speed, low, high))
     print("-" * 66)
     overall = (total_src / total_aot) if total_aot > 0 else 0.0
     print("%-28s %12.3f %12.3f %8.2fx" % ("TOTAL(按耗时加权)", total_src, total_aot, overall))

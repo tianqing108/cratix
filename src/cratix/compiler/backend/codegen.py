@@ -1320,7 +1320,9 @@ class FunctionGen:
             self.emit("    " + var + " = PyTuple_GetSlice(args, " + str(n_pos - base) + ", PyTuple_GET_SIZE(args));")
             self.emit("    if (" + var + " == NULL) goto cratix_error;")
             self.emit("} else {")
-            self.emit("    " + var + " = PyTuple_New(0);")
+            # **空参数元组用缓存** ✅ —— 每次调用都 `PyTuple_New(0)` 是一次真分配 ✅
+            # （`def f(a, *rest)` 这种签名在调用时最常见的就是"没有多余参数" ✅）
+            self.emit("    " + var + " = cratix_empty_tuple();")
             self.emit("    if (" + var + " == NULL) goto cratix_error;")
             self.emit("}")
 

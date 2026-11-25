@@ -107,6 +107,16 @@ done:
     return result;
 }
 
+/* **共享的空元组** ✅ —— `*rest` 没收到东西时不必每次分配 ✅（不可变 ✅ 可安全共享 ✅）。 */
+static PyObject *cratix_empty_tuple(void) {
+    static PyObject *cached = NULL;
+    if (cached == NULL) {
+        cached = PyTuple_New(0);
+        if (cached == NULL) return NULL;
+    }
+    return Py_NewRef(cached);
+}
+
 static int cratix_truth(PyObject *o) {
     int r = PyObject_IsTrue(o);
     if (r < 0) {
