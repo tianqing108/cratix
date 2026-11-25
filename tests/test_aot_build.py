@@ -16,7 +16,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from cratix.compiler import driver
+from cratix.compiler import driver, loader
 from cratix.compiler.golden import diff
 
 CORPUS = ROOT / "tests" / "corpus"
@@ -37,14 +37,10 @@ class AotBuildTest(unittest.TestCase):
         # 产物放在 build/ 下 ✅ —— 加载后的 .pyd 在 Windows 上是锁住的 ✅
         # → 临时目录清理会失败 ✅（实测 ✅）→ 用固定的构建目录 ✅
         out_dir = ROOT / "build" / "aot_test"
-        # 开发期用**别名 init** ✅（标准加载器按模块名末段找 PyInit ✅）
-        alias = "PyInit_" + module_name.rsplit(".", 1)[-1]
-        pyd = driver.build_pyd(mc, out_dir, alias_init=alias)
-        # spec 名 = **模块名** ✅（CPython 要求 m_name 与 spec 名一致 ✅）；
-        # init 符号按**文件名末段**找 ✅（所以文件名叫 cratix_<hash>.pyd ✅）。
-        spec = importlib.util.spec_from_file_location(module_name, pyd)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        pyd = driver.build_pyd(mc, out_dir)
+        # 用 **ctypes 直接调用 init 符号** ✅ —— 与 stub 的加载路径一致 ✅
+        # （标准扩展加载器要求单阶段模块带 m_def ✅ —— 3.14 未导出 SetModuleDef ✅）
+        module = loader.load_compiled_module(pyd, mc.init_symbol)
         return mc, module
 
     def test_01_corpus_basic_compiles_and_matches(self):

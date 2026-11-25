@@ -93,8 +93,13 @@ def _param_names(args: ast.arguments) -> list:
     return names
 
 
-def analyze_function(node: ast.FunctionDef) -> Scope:
-    """分析一个函数的局部 / 全局 / 自由变量 ✅。"""
+def analyze_function(node: ast.FunctionDef, module_globals: set | None = None) -> Scope:
+    """分析一个函数的局部 / 全局 / 自由变量 ✅。
+
+    module_globals：**模块级绑定的名字** ✅（import 的别名 ✅ / 常量 ✅ / 子函数 ✅）。
+    这些名字在函数里是**模块全局** ✅ —— **不是闭包自由变量** ✅。
+    （不区分的话 ✅ → `import sys` 后的 sys 会被当成闭包 ✅ → 模块被误拒 ✅）
+    """
     analyzer = _ScopeAnalyzer()
     for stmt in node.body:
         analyzer.visit(stmt)
@@ -103,5 +108,11 @@ def analyze_function(node: ast.FunctionDef) -> Scope:
     scope.globals_ = set(analyzer.globals)
     scope.nonlocals_ = set(analyzer.nonlocals)
     scope.locals_ = (analyzer.bound | params) - scope.globals_ - scope.nonlocals_
-    scope.free = analyzer.reads - scope.locals_ - scope.globals_ - BUILTIN_NAMES
+    scope.free = (
+        analyzer.reads
+        - scope.locals_
+        - scope.globals_
+        - set(module_globals or ())
+        - BUILTIN_NAMES
+    )
     return scope

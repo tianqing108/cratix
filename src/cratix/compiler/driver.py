@@ -64,8 +64,12 @@ def _module_level_supported(stmt) -> bool:
         return isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str)
     if isinstance(stmt, ast.Import):
         return True
-    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return True
+    if isinstance(stmt, ast.ClassDef):
+        # **v1 不支持类** ✅ —— 静默跳过会丢掉模块的公开面 ✅
+        # → 整个模块回退 .pyc ✅（M3 起支持 ✅）
+        return False
     return False
 
 
@@ -81,6 +85,10 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
     module_stmts = []
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(stmt, ast.ClassDef):
+                result.module_ok = False
+                result.module_reason = "模块级类定义（v1 不支持）"
+                return result
             continue
         if not _module_level_supported(stmt):
             result.module_ok = False
@@ -90,12 +98,30 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
             continue  # 文档字符串 ✅ —— 无需编译 ✅
         module_stmts.append(stmt)
 
+    # --- 模块级绑定的名字 ✅（= 函数里的模块全局 ✅）---
+    module_globals: set = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    module_globals.add(target.id)
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            module_globals.add(stmt.target.id)
+        elif isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                module_globals.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(stmt, ast.ImportFrom):
+            for alias in stmt.names:
+                module_globals.add(alias.asname or alias.name)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            module_globals.add(stmt.name)
+
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
     for stmt in tree.body:
         if not isinstance(stmt, ast.FunctionDef):
             continue
-        scope = analyze_function(stmt)
+        scope = analyze_function(stmt, module_globals)
         try:
             check_function(stmt, scope)
             built = builder.build_stmt(stmt)
@@ -126,7 +152,10 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
 
     result.key_names = key_names
     result.module_gen = module_gen
-    result.c_source = codegen.generate_module(
+    # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
+    # → stub 的 is_def 判定为假 ✅ → 直接返回模块 ✅ → 模块体已在 init 里执行 ✅
+    # → meta.json 标 exec_done ✅ → 引导模块不再调 exec_def ✅（否则会重跑 ✅）。
+    result.c_source = codegen.generate_module_single_phase(
         module_name,
         result.init_symbol,
         result.functions,
@@ -151,7 +180,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
     stem = module_compile.init_symbol[len("PyInit_"):]
     c_path = out_dir / (stem + ".c")
     if alias_init:
-        module_compile.c_source = codegen.generate_module(
+        module_compile.c_source = codegen.generate_module_single_phase(
             module_compile.module_name,
             module_compile.init_symbol,
             module_compile.functions,

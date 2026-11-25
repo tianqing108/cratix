@@ -168,6 +168,101 @@ def module_body_parts(gen: FunctionGen):
     return decls, list(gen.lines), cleanup
 
 
+
+
+def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
+                                 key_names: list, module_gen=None, alias_init: str | None = None) -> str:
+    """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
+
+    **为什么单阶段** ✅：
+    - CPython 的 `PyModuleDef_Init()` 返回**模块对象** ✅（不是 def 指针 ✅）——
+      stub 的多阶段判定 `mod->ob_type == PyModuleDef_Type` ✅ 对它不成立 ✅；
+    - 单阶段下 init 直接返回模块 ✅ → stub 的单阶段路径 ✅ → 模块体在 init 里已执行 ✅；
+    - 代价：模块体**只能执行一次** ✅ → bootstrap **不要**再调 `exec_def` ✅。
+    """
+    nl = chr(10)
+    q = chr(34)
+    out = []
+    out.append("/* 由 cratix AOT 编译器生成 —— 请勿手改 ✅ */")
+    out.append("#include <Python.h>")
+    out.append("#include " + q + "cratix_runtime.h" + q)
+    out.append("")
+    out.append("static PyObject *cratix_globals = NULL;")
+    out.append("static PyObject *cratix_builtins = NULL;")
+    out.append("static PyObject *cratix_builtins_module = NULL;")
+    out.append("")
+    for key in sorted(set(key_names)):
+        out.append("static PyObject *cratix_key_" + c_ident(key) + " = NULL;")
+    out.append("")
+    for gen in functions:
+        out.append(generate_function(gen))
+        out.append("")
+    out.append("static PyMethodDef cratix_methods[] = {")
+    for gen in functions:
+        cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(gen.func_name)
+        out.append("    {" + q + gen.func_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
+    out.append("    {NULL, NULL, 0, NULL}")
+    out.append("};")
+    out.append("")
+    # --- 模块体 ✅（在 init 里执行一次 ✅）---
+    out.append("static int cratix_run_body(PyObject *m) {")
+    body_decls = []
+    body_cleanup = []
+    if module_gen is not None:
+        body_decls, body_lines, body_cleanup = module_body_parts(module_gen)
+        out.extend(body_decls)
+    out.append("    cratix_globals = PyModule_GetDict(m);")
+    out.append("    if (cratix_globals == NULL) return -1;")
+    out.append("    cratix_builtins_module = PyImport_AddModule(\"builtins\");")
+    out.append("    if (cratix_builtins_module == NULL) return -1;")
+    out.append("    cratix_builtins = PyModule_GetDict(cratix_builtins_module);")
+    out.append("    if (cratix_builtins == NULL) return -1;")
+    for key in sorted(set(key_names)):
+        out.append("    cratix_key_" + c_ident(key) + " = PyUnicode_InternFromString(" + q + key + q + ");")
+        out.append("    if (cratix_key_" + c_ident(key) + " == NULL) return -1;")
+    if module_gen is not None:
+        out.extend(body_lines)
+        out.extend(body_cleanup)
+    out.append("    return 0;")
+    if module_gen is not None:
+        out.append("cratix_error:")
+        out.extend(body_cleanup)
+        out.append("    return -1;")
+    out.append("}")
+    out.append("")
+    out.append("static struct PyModuleDef cratix_module = {")
+    out.append("    PyModuleDef_HEAD_INIT,")
+    out.append("    " + q + module_name + q + ",")
+    out.append("    NULL,")
+    # **m_size = -1** ✅ —— `PyModule_ExecDef()` 要求 **m_size < 0** ✅
+    # （m_size >= 0 是"带状态"模块 ✅ → ExecDef 报 "module has state" ✅）。
+    out.append("    -1,")
+    out.append("    cratix_methods,")
+    out.append("    NULL,")
+    out.append("    NULL, NULL, NULL")
+    out.append("};")
+    out.append("")
+    out.append("PyMODINIT_FUNC " + init_symbol + "(void) {")
+    # **PyModule_New + AddFunctions + SetModuleDef** ✅ ——
+    # PyModuleDef_Init 在 3.14 返回 **def 实例** ✅（不是模块 ✅）；
+    # PyModule_Create 在 3.14 要求 **m_size >= 0** ✅（我们是 -1 ✅ → 报
+    # "bad argument to internal function" ✅）。
+    # → 手工搭模块 ✅：名字 ✅ + 方法表 ✅ + def 关联 ✅（供 GetDef ✅）。
+    out.append("    PyObject *m = PyModule_New(" + q + module_name + q + ");")
+    out.append("    if (m == NULL) return NULL;")
+    out.append("    if (PyModule_AddFunctions(m, cratix_methods) < 0) { Py_DECREF(m); return NULL; }")
+    # **不设 m_def** ✅ —— `PyModule_SetModuleDef` 在 3.14 **没有导出** ✅（实测 ✅）；
+    # 我们也不需要 ✅ —— 引导模块对 exec_done 的记录**不会**调 exec_def ✅。
+    out.append("    if (cratix_run_body(m) < 0) { Py_DECREF(m); return NULL; }")
+    out.append("    return m;")
+    out.append("}")
+    if alias_init:
+        out.append("")
+        out.append("PyMODINIT_FUNC " + alias_init + "(void) {")
+        out.append("    return " + init_symbol + "();")
+        out.append("}")
+    return nl.join(out) + nl
+
 def generate_module(module_name: str, init_symbol: str, functions: list, key_names: list,
                     module_gen=None, alias_init: str | None = None) -> str:
     """生成整个模块的 C 代码 ✅（多阶段初始化 ✅ —— 与 stub 的加载桥契合 ✅）。"""
@@ -547,6 +642,43 @@ class FunctionGen:
                 self.emit("    PyErr_SetString(PyExc_AssertionError, \"\");")
             self.emit("    goto cratix_error;")
             self.emit("}")
+            return
+        if kind == "import":
+            # **import 语句** ✅ —— 绑定到模块字典 ✅（= 模块全局 ✅）
+            # "import a.b" 不带 asname 时绑定**顶层包** a ✅（与 CPython 一致 ✅）。
+            for module_name, asname in node.get("names", []):
+                top = module_name.split(".")[0]
+                key = self.new_tmp()
+                self.emit(key + " = " + const_expr(module_name) + ";")
+                self.emit("if (" + key + " == NULL) goto cratix_error;")
+                mod = self.new_tmp()
+                # **PyImport_Import** ✅（收 PyObject* ✅ —— 完整 API ✅）——
+                # `PyImport_ImportModule` 收的是 **char*** ✅ → 传 PyObject* 会把指针当字符串 ✅
+                # → 导入名变成垃圾 ✅ → "No module named '\x01'" ✅（实测 ✅）。
+                # `PyImport_ImportModuleObject` 在 3.14 **没有导出** ✅ → 用 PyImport_Import ✅。
+                self.emit(mod + " = PyImport_Import(" + key + ");")
+                self.emit("if (" + mod + " == NULL) goto cratix_error;")
+                if asname:
+                    bind_name = asname
+                    bind_val = mod
+                elif top == module_name:
+                    bind_name = module_name
+                    bind_val = mod
+                else:
+                    bind_name = top
+                    top_key = self.new_tmp()
+                    self.emit(top_key + " = " + const_expr(top) + ";")
+                    self.emit("if (" + top_key + " == NULL) goto cratix_error;")
+                    bind_val = self.new_tmp()
+                    self.emit(bind_val + " = PyImport_Import(" + top_key + ");")
+                    self.emit("if (" + bind_val + " == NULL) goto cratix_error;")
+                self.emit(
+                    "if (PyDict_SetItemString(cratix_globals, "
+                    + c_string(bind_name)
+                    + ", "
+                    + bind_val
+                    + ") < 0) goto cratix_error;"
+                )
             return
         if kind == "try":
             raise Unsupported("try/except（C 级异常展开未实现）")

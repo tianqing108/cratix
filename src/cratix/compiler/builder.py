@@ -126,6 +126,11 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             var = build_expr(item.optional_vars) if item.optional_vars is not None else None
             pairs.extend([ctx, var])
         return ir.node("with", *pairs, body=[build_stmt(s) for s in node.body])
+    if isinstance(node, ast.Import):
+        names = []
+        for alias in node.names:
+            names.append((alias.name, alias.asname))
+        return ir.node("import", names=names)
     if isinstance(node, ast.FunctionDef):
         flags = ("async", bool(node.decorator_list))
         return ir.node(

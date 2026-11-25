@@ -113,7 +113,11 @@ class _MemExtLoader:
         module.__dict__["__compiled__"] = _compiled_marker()
         if self.rec.get("kind") == "package":
             module.__path__ = [_virtual_prefix(module.__name__)]
-        cratix_loader.exec_def(module)
+        # **模块体已在加载时执行过** ✅（多阶段 ✅ → 加载器调了 exec 槽位 ✅）
+        # → 再调 exec_def 会**重跑一遍** ✅（副作用重复 ✅ + globals 指向另一个模块对象 ✅）
+        # → 只对"没标记 exec_done"的记录调用 ✅（标准扩展 ✅ 保持 cypack 行为 ✅）。
+        if not self.rec.get("exec_done"):
+            cratix_loader.exec_def(module)
 
 
 class _AotFinder:
