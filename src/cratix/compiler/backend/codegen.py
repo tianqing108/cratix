@@ -1073,6 +1073,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            Py_DECREF(cratix_d);")
             out.append("        }")
             desc_index += 1
+        # **回退方法** ✅ —— 把源码 exec 进模块字典 ✅ -> 挂到类上 ✅ -> 删掉临时名 ✅
+        for fb_name, fb_source, _fb_order in (cls.get("fallback_methods") or []):
+            out.append("        {")
+            out.append("            PyObject *cratix_fbm = PyRun_String(" + c_string(fb_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+            out.append("            if (cratix_fbm == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_fbm);")
+            out.append("            PyObject *cratix_fbv = PyDict_GetItemString(cratix_globals, " + q + fb_name + q + ");")
+            out.append("            if (cratix_fbv == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            Py_INCREF(cratix_fbv);")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + fb_name + q + ", cratix_fbv) < 0) { Py_DECREF(cratix_fbv); Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_fbv);")
+            out.append("            if (PyDict_DelItemString(cratix_globals, " + q + fb_name + q + ") < 0) { PyErr_Clear(); }")
+            out.append("        }")
         # **只有注解的类体条目** ✅（`x: int` ✅）—— 建一个临时命名空间 exec 它们 ✅，
         # 把这个命名空间的 `__annotations__` 挂到类上 ✅（与源码执行语义一致 ✅）。
         ann_sources = cls.get("ann_only") or []

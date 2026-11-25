@@ -1022,6 +1022,8 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             "descriptor_methods": [],
             # **只有注解的类体条目** ✅（`x: int` ✅ —— 只进 `__annotations__` ✅）
             "ann_only": [],
+            # **回退方法** ✅（(名字, 源码, 行号) ✅ —— 建类时 exec 出来挂到类上 ✅）
+            "fallback_methods": [],
             # **类体里的类** ✅（(名字, 顺序, 源码) ✅）
             "inner_classes": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）
@@ -1081,12 +1083,14 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     result.plans.append(FunctionPlan(item.name, False, exc.reason))
                     # **类方法在类体里有缩进** ✅ -> 回退必须 dedent ✅ ✅
                     segment = _source_segment(source, item, dedent=True)
-                    if segment:
-                        result.fallback_code[item.name] = {
-                            "source": segment,
-                            "filename": str(path),
-                            "order": item.lineno,
-                        }
+                    # **只回退这个方法** ✅（挂到类上 ✅ —— 不再拖累整个类 ✅）。
+                    # **dunder 不行** ✅：槽位类的 `__init__`/`__getattr__` 等由 `tp_*` 槽调用 ✅，
+                    # 挂个 Python 函数进去也不会被调到 ✅ -> 那些一律整类回退 ✅。
+                    if segment and not (item.name.startswith("__") and item.name.endswith("__")):
+                        class_info["fallback_methods"].append((item.name, segment, item.lineno))
+                    elif segment:
+                        class_broken = "类方法回退：" + item.name + "（dunder）"
+                        break
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
                 class_info["methods"].append((item.name, gen))
@@ -1111,11 +1115,12 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
             elif isinstance(item, ast.AsyncFunctionDef):
-                # **async 方法** ✅ 仍然让**整个类**回退 ✅ —— 试过"只回退这个方法" ✅，
-                # 但类工厂/建类路径**不会把回退方法挂到类上** ✅ -> 方法直接消失 ✅（比整类回退更糟 ✅）。
-                # 要单独回退方法 ✅，得先把"回退方法挂类"这条路径做出来 ✅（TODO ✅）。
-                class_broken = "类体语句：AsyncFunctionDef"
-                break
+                # **`async` 方法** ✅ —— 编译不了 ✅ 但可以**只回退它自己** ✅（挂到类上 ✅）。
+                result.plans.append(FunctionPlan(item.name, False, "async 方法（回退成源码 ✅）"))
+                segment = _source_segment(source, item, dedent=True)
+                if segment:
+                    class_info["fallback_methods"].append((item.name, segment, item.lineno))
+                continue
             elif isinstance(item, ast.ClassDef):
                 # **类体里的类** ✅ —— 用**源码 exec** ✅（在 maker 里建完之后挂到外层类上 ✅）
                 inner_source = _source_segment(source, item, dedent=True)
