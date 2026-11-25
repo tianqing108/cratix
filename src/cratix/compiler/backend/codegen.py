@@ -1213,7 +1213,7 @@ class FunctionGen:
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
                  cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
                  genexp_captures=None, deleted_locals=None, mdef_names=None,
-                 cells_only=None, int_safe=None):
+                 cells_only=None, int_safe=None, str_safe=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -1232,6 +1232,8 @@ class FunctionGen:
         # **住 cell 字典的名字不参与** ✅ —— cell 里存的是**对象** ✅，
         # 只留 C 值会让内层/闭包看到旧值或 `None` ✅（实测：闭包测试全挂 ✅）。
         self.int_safe: set = set(int_safe or ()) - self.cell_names - self.cells_only - self.closure_names
+        # **肯定是字符串的局部** ✅（`s = s + t` 原地追加特化用 ✅）
+        self.str_safe: set = set(str_safe or ())
         # **结构性复杂就不优化** ✅ —— 嵌套 def / lambda 捕获 / 推导式捕获 / 类工厂 都会
         # 以"对象"形式间接访问局部 ✅，只留 C 值会让它们看到旧值 ✅（实测崩溃 ✅）。
         if self.inner_sites or self.lambda_captures or self.genexp_captures:
@@ -2485,7 +2487,40 @@ class FunctionGen:
             return
         if kind == "assign":
             targets = node.get("targets", [])
-            # **单目标 + int-safe** ✅ -> 走不装箱路径 ✅（不建对象 ✅ 除非溢出 ✅）
+            # **`s = s + t`（自拼接）** ✅ -> **原地追加** ✅（#165 ✅）
+            # 对应 CPython 的 `BINARY_OP_INPLACE_ADD_UNICODE`：引用计数为 1 时**不复制** ✅。
+            # `PyUnicode_Append` 对**非 unicode** 会自动退回 `PyNumber_Add` ✅，语义一致 ✅。
+            value_node = node.kids[0]
+            if (
+                len(targets) == 1
+                and targets[0].kind == "name"
+                and value_node.kind == "binop"
+                and value_node.get("op") == "+"
+                and value_node.kids[0].kind == "name"
+                and value_node.kids[0].get("id") == targets[0].get("id")
+                and targets[0].get("id") in self.scope.locals_
+                and targets[0].get("id") in self.str_safe
+                and targets[0].get("id") not in self.int_safe
+                and targets[0].get("id") not in self.cells_only
+                and self.comp_var(targets[0].get("id")) is None
+            ):
+                name = targets[0].get("id")
+                var = self.local_var(name)
+                rhs = self.emit_expr(value_node.kids[1])
+                self.emit("if (" + var + " == NULL) {")
+                self.emit("    " + var + " = " + rhs + ";")
+                self.emit("    " + rhs + " = NULL;")
+                self.emit("} else {")
+                # **`PyUnicode_Append` 在新版 CPython 里是 `void`** ✅（3.14 ✅）——
+                # 不能接返回值 ✅（实测：`error C2186: 操作数不能具有类型 void` ✅），改成查 `PyErr_Occurred` ✅。
+                self.emit("    PyUnicode_Append(&" + var + ", " + rhs + ");")
+                self.emit("    if (PyErr_Occurred()) { Py_DECREF(" + rhs + "); goto cratix_error; }")
+                self.emit("    Py_DECREF(" + rhs + ");")
+                self.emit("    " + rhs + " = NULL;")
+                self.emit("}")
+                if name in self.cell_names and self.cells_var:
+                    self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", " + var + ") < 0) goto cratix_error;")
+                return
             if (len(targets) == 1 and targets[0].kind == "name"
                     and targets[0].get("id") in self.int_safe):
                 self.emit_int_assign(targets[0].get("id"), node.kids[0])

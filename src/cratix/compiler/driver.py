@@ -290,6 +290,36 @@ def _int_safe(func_node, scope) -> set:
         return set()
 
 
+def _str_safe(func_node) -> set:
+    """**"肯定是字符串"的局部** ✅ —— 只用于 `s = s + t` 的原地追加特化 ✅。
+
+    判定（保守 ✅）：**第一次赋值是字符串字面量** ✅，且之后每次赋值都是 `x = x + ...` ✅。
+    这样 `PyUnicode_Append` 的左值一定有 unicode ✅（它对非 unicode 左值会报内部错误 ✅ 实测 ✅）。
+    """
+    import ast as _ast
+
+    first_literal = set()
+    other_assign = set()
+    self_add = set()
+    for sub in _ast.walk(func_node):
+        if isinstance(sub, _ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], _ast.Name):
+            name = sub.targets[0].id
+            if isinstance(sub.value, _ast.Constant) and isinstance(sub.value.value, str):
+                first_literal.add(name)
+            elif (
+                isinstance(sub.value, _ast.BinOp)
+                and isinstance(sub.value.op, _ast.Add)
+                and isinstance(sub.value.left, _ast.Name)
+                and sub.value.left.id == name
+            ):
+                self_add.add(name)
+            else:
+                other_assign.add(name)
+        elif isinstance(sub, _ast.AugAssign) and isinstance(sub.target, _ast.Name):
+            other_assign.add(sub.target.id)
+    return (first_literal & self_add) - other_assign
+
+
 def _module_level_supported(stmt) -> bool:
     """**模块级语句** ✅ —— 以前只放"简单赋值 + import" ✅，结果**真实模块几乎全被拒** ✅
     （实测：标准库 20 个模块只有 2 个能过 ✅ —— `if`/`try`/`expr` 全是拦路虎 ✅）。
@@ -944,6 +974,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 lambda_captures=lambda_captures,
                 cell_names=inner_cells.get(stmt.name, set()),
                 int_safe=_int_safe(stmt, scope),
+                str_safe=_str_safe(stmt),
                 cells_only=inner_written.get(stmt.name, set()),
                 inner_sites=inner_sites,
                 genexp_captures=genexp_captures,

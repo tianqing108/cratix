@@ -223,6 +223,22 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#165 **`s = s + t` 原地追加**（`tokenize` 0.91× -> 1.14× ✅）
+
+CPython 有一个我们没做的特化 ✅：`BINARY_OP_INPLACE_ADD_UNICODE` ✅ ——
+`s = s + t` 且 `s` 的引用计数为 1 时 ✅ **原地扩容** ✅（不复制整个字符串 ✅）。
+
+**做法** ✅：识别 `x = x + <表达式>` 且 `x` 是"**肯定是字符串**"的局部 ✅ ->
+发 `PyUnicode_Append(&v_x, rhs)` ✅（它对非 unicode 也会退回 `PyNumber_Add` ✅）。
+
+**两个坑（实测 ✅）**：
+1. `PyUnicode_Append` 在 3.14 **返回 void** ✅ —— 接返回值直接 `error C2186` ✅，改成查 `PyErr_Occurred` ✅；
+2. **左值必须是 unicode** ✅ —— 一开始对**所有局部**都做 ✅，于是 `total = total + value`（整数累加 ✅）
+   变成 `PyUnicode_Append(&total, ...)` ✅ -> `SystemError: bad argument to internal function` ✅。
+   修法 ✅：只对"**第一次赋的是字符串字面量、之后只有自拼接**"的局部做 ✅（`_str_safe` ✅）。
+
+**实测** ✅：`tokenize` **0.91× -> 1.14×** ✅（逐字符扫描 ✅）、`build_records` 1.08 -> 1.12 ✅。
+
 ## 追加：#164 **P0：借用引用被过度释放**（"第二次调用才炸" ✅）
 
 **现象** ✅：同一个函数**第二次**调用时抛 `TypeError: sort() takes no positional arguments` ✅
