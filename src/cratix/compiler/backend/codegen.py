@@ -2857,6 +2857,29 @@ class FunctionGen:
             fn = BINOP_FUNCS.get(node.get("op"))
             if fn is None:
                 raise Unsupported("二元运算符：" + str(node.get("op")))
+            # **`x % k` / `x // k`（k 是正字面量 ✅、x 非负 ✅）-> C 算术** ✅（#156 ✅）
+            # 语义等价 ✅：x >= 0 且 k > 0 时，Python 的地板除/取模与 C 的截断版**完全一致** ✅；
+            # 任何可疑情况（非精确 int ✅ / 负数 ✅ / 溢出 ✅）都退回 `PyNumber_*` ✅。
+            _op = node.get("op")
+            _lit = node.kids[1]
+            _k = _lit.get("value") if _lit.kind == "const" else None
+            if _op in ("%", "//") and isinstance(_k, int) and not isinstance(_k, bool) and 0 < _k <= (1 << 30):
+                _fn = fn
+                self.emit("if (PyLong_CheckExact(" + left + ")) {")
+                self.emit("    long long cratix_ln = PyLong_AsLongLong(" + left + ");")
+                self.emit("    if (cratix_ln >= 0 && !(cratix_ln == -1 && PyErr_Occurred())) {")
+                # **必须写成 C 的 `/`** ✅ —— `//` 在 C 里是**注释** ✅（实测：整行被吃掉 ✅）
+                _cop = "/" if _op == "//" else "%"
+                self.emit("        " + t + " = PyLong_FromLongLong(cratix_ln " + _cop + " " + str(_k) + "LL);")
+                self.emit("    } else {")
+                self.emit("        PyErr_Clear();")
+                self.emit("        " + t + " = " + _fn + "(" + left + ", " + right + ");")
+                self.emit("    }")
+                self.emit("} else {")
+                self.emit("    " + t + " = " + _fn + "(" + left + ", " + right + ");")
+                self.emit("}")
+                self.emit("if (" + t + " == NULL) goto cratix_error;")
+                return t
             if node.get("op") == "**":
                 # **`PyNumber_Power` 是三元函数** ✅（第三个参数是取模用的 ✅ 传 `Py_None` ✅）。
                 # 以前只传两个 ✅ -> **C2198 编译失败** ✅（没有语料用过 `**` ✅ 一直没被发现 ✅）。
