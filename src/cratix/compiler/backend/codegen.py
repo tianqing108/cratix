@@ -1799,6 +1799,8 @@ class FunctionGen:
         self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: closure helper missing\");")
         self.emit("    goto cratix_error;")
         self.emit("}")
+        # **借用引用变拥有** ✅（同上 ✅）
+        self.emit("Py_INCREF(" + fn + ");")
 
         value = self.new_tmp()
         if site["captures"]:
@@ -3132,6 +3134,10 @@ class FunctionGen:
             self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: lambda helper missing\");")
             self.emit("    goto cratix_error;")
             self.emit("}")
+            # **借用引用变拥有** ✅ —— `PyDict_GetItemString` 返回的是**借用** ✅，
+            # 而临时变量会在出口/每轮被 DECREF ✅ -> 不 INCREF 就**每调用一次少一个引用** ✅
+            # （实测：同一函数第二次 `sorted(x, key=lambda ...)` 抛 `sort() takes no positional arguments` ✅）
+            self.emit("Py_INCREF(" + fn + ");")
             captures = set((self.lambda_captures or {}).get(node.get("key")) or ())
             if captures:
                 # **捕获外层局部** ✅ -> `functools.partial(fn, cells)` ✅（与嵌套 def 一致 ✅）

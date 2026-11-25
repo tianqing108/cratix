@@ -698,9 +698,28 @@ AOT 函数 **35428 → 36139** ✅（**0.954** ✅）、崩溃 **0** ✅。
 
 **GEO(全部) 1.42 -> 1.31** ✅、TOTAL 1.37 -> 1.32 ✅ —— **这才是能对外说的数字** ✅。
 
-**顺带发现一个 P0 真 bug** ✅：`wordfreq` 里**第二次** `sorted(x, key=...)` 会抛
-`sort() takes no positional arguments` ✅（第一次正常 ✅）。这形状在真实代码里到处都是 ✅
-（同一个函数里排两次序 ✅）—— **下一轮优先修** ✅；修好之前它**不进基准** ✅（否则基准直接崩 ✅）。
+**顺带发现一个 P0 真 bug（已修 ✅ #164）** ✅：`wordfreq` 里**第二次** `sorted(x, key=...)` 抛
+`sort() takes no positional arguments` ✅。根因是 **`PyDict_GetItemString` 的借用引用被放进会被清理的临时变量** ✅
+-> 每调用一次 helper 少一个引用 ✅ -> 第二次就是已释放对象 ✅。
+
+**完整诚实榜单**（12 个用例 ✅）：
+
+| 用例 | 加速比 |
+| --- | --- |
+| `loop_num` | 3.85× |
+| `loop_str` | 1.64× |
+| `control` | 1.50× |
+| `matrix_ops` | 1.20× |
+| `containers` | 1.16× |
+| `self_calls` / `attribute_reads` | 1.10× / 1.09× |
+| `build_records` | 1.08× |
+| `strings` | 1.07× |
+| `mixed` | 1.06× |
+| `wordfreq` | **0.98×** ⚠️ |
+| `tokenize` | **0.91×** ⚠️ |
+
+**GEO(全部) = 1.29×** ✅、TOTAL 1.34× ✅ —— 真实负载里**字符串逐字符处理**是我们的短板 ✅
+（CPython 有 `BINARY_OP_INPLACE_ADD_UNICODE` 这种"原地拼字符串"特化 ✅ 我们没有 ✅）。
 
 ## 追加：#160 **整数局部不装箱落地**（`loop_num` 1.20 -> 3.72× ✅）
 
