@@ -171,4 +171,31 @@ def analyze_int_locals(func_node, locals_: set) -> dict:
                 changed = True
     for name in candidates - safe:
         blocked.setdefault(name, "赋值不是纯整数表达式")
+
+    # **只在"逃逸"位置用到的不装箱没意义** ✅ ——
+    # 它们每次使用都要 `PyLong_FromLongLong` 造对象 ✅，反而多一个 tag 分支 ✅。
+    # 所以要求：至少有一次**整数上下文**使用 ✅（与别的 int-safe 名字/字面量做 `+ - *` 或比较 ✅）。
+    used_in_int: set = set()
+    for sub in _walk_own(func_node):
+        # **`x += 2`** ✅ —— `x` 自己就在做整数加法 ✅，算"整数上下文" ✅
+        if isinstance(sub, ast.AugAssign) and isinstance(sub.op, _INT_BINOPS) \
+                and isinstance(sub.target, ast.Name) and sub.target.id in safe:
+            used_in_int.add(sub.target.id)
+        if isinstance(sub, ast.BinOp) and isinstance(sub.op, _INT_BINOPS):
+            sides = [sub.left, sub.right]
+            if any(_is_int_expr(side, safe) for side in sides):
+                for side in sides:
+                    if isinstance(side, ast.Name) and side.id in safe:
+                        used_in_int.add(side.id)
+        elif isinstance(sub, ast.Compare) and sub.comparators:
+            sides = [sub.left, sub.comparators[0]]
+            if any(_is_int_expr(side, safe) for side in sides):
+                for side in sides:
+                    if isinstance(side, ast.Name) and side.id in safe:
+                        used_in_int.add(side.id)
+    for name in list(safe):
+        if name not in used_in_int:
+            safe.discard(name)
+            blocked.setdefault(name, "只在逃逸位置使用（不装箱没收益）")
+
     return {"safe": sorted(safe), "blocked": blocked}
