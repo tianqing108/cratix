@@ -72,6 +72,43 @@ def c_ident(name: str) -> str:
     return "v_" + "".join(out)
 
 
+def c_bytes_literal_bytes(data: bytes) -> str:
+    """任意字节 -> C 字符串字面量 ✅（八进制转义 ✅）。"""
+    out = ["\""]
+    for byte in data:
+        if byte == 0x5C:
+            out.append("\\\\")
+        elif byte == 0x22:
+            out.append("\\" + chr(34))
+        elif byte == 0x0A:
+            out.append("\\n")
+        elif byte == 0x0D:
+            out.append("\\r")
+        elif byte == 0x09:
+            out.append("\\t")
+        elif 0x20 <= byte <= 0x7E:
+            out.append(chr(byte))
+        else:
+            out.append("\\%03o" % byte)
+    out.append("\"")
+    return "".join(out)
+
+
+def py_str_expr(text: str) -> str:
+    """Python 字符串 -> 建对象的 C 表达式 ✅（新引用 ✅）。
+
+    **孤立代理字符** ✅（`test/` 里很多 ✅）编不进 UTF-8 ✅ ——
+    用 `surrogatepass` 编成字节 ✅ + `PyUnicode_DecodeUTF8(..., "surrogatepass")` ✅，
+    建出来的字符串与源码里**完全一致** ✅。
+    """
+    try:
+        data = text.encode("utf-8")
+    except UnicodeEncodeError:
+        raw = text.encode("utf-8", "surrogatepass")
+        return "PyUnicode_DecodeUTF8(" + c_bytes_literal_bytes(raw) + ", " + str(len(raw)) + ", \"surrogatepass\")"
+    return "PyUnicode_FromString(" + c_bytes_literal_bytes(data) + ")"
+
+
 def c_string(text: str) -> str:
     """字符串字面量 -> C 字符串 ✅（按 **UTF-8 字节**转义 ✅）。
 
@@ -152,7 +189,7 @@ def const_expr(value) -> str:
     if isinstance(value, float):
         return "PyFloat_FromDouble(%s)" % repr(value)
     if isinstance(value, str):
-        return "PyUnicode_FromString(%s)" % c_string(value)
+        return py_str_expr(value)
     if isinstance(value, bytes):
         return "PyBytes_FromStringAndSize(%s, %d)" % (c_bytes_literal(value), len(value))
     if value is Ellipsis:
