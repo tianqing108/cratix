@@ -53,6 +53,8 @@ class ModuleCompile:
     func_meta: dict = field(default_factory=dict)
     # **类 / 方法的元数据** ✅
     class_meta: dict = field(default_factory=dict)
+    # **生成器表达式的辅助函数源码** ✅（名字 -> 源码 ✅，模块 init 里建出来 ✅）
+    genexp_sources: dict = field(default_factory=dict)
 
     @property
     def supported_names(self) -> list:
@@ -302,6 +304,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 }
             continue
         result.functions.append(gen)
+        result.genexp_sources.update(gen.genexp_sources)
         result.plans.append(FunctionPlan(stmt.name, True, ""))
         # **元数据保真** ✅：docstring + 文本签名 ✅
         result.func_meta[stmt.name] = {
@@ -371,6 +374,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
                 class_info["methods"].append((item.name, gen))
+                result.genexp_sources.update(gen.genexp_sources)
                 # **方法元数据** ✅：doc + 类名限定的 qualname ✅
                 result.func_meta[stmt.name + "." + item.name] = {
                     "doc": _doc_of(item),
@@ -401,6 +405,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
 
     if module_gen is not None:
         key_names.extend(sorted(module_gen.global_names))
+        result.genexp_sources.update(module_gen.genexp_sources)
     result.key_names = key_names
     result.module_gen = module_gen
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
@@ -417,6 +422,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.classes,
         consts,
         result.func_meta,
+        result.genexp_sources,
     )
     result.consts = consts
     return result
@@ -456,6 +462,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             classes=module_compile.classes,
             consts=module_compile.consts,
             func_meta=module_compile.func_meta,
+            genexps=module_compile.genexp_sources,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

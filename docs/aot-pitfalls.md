@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：生成器表达式 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 57 | 模块导入直接 `SystemError: globals must be a real dict` ✅ | 生成器辅助函数用 `PyRun_String` 建 ✅ —— 我把这段放在了 `cratix_globals = PyModule_GetDict(m)` **之前** ✅ | 挪到 globals/builtins/键都就绪**之后** ✅、模块体与类创建**之前** ✅ |
+| 58 | 大部分生成器表达式仍然**整函数回退** ✅ | 捕获检查把**最外层可迭代对象**里的名字也算成了"引用外层局部" ✅（`sum(x for x in items)` 的 `items` ✅） | 最外层那个不检查 ✅ —— 它本来就在外层作用域求值 ✅ |
+| 59 | 黄金模型跑 `captured`（`x + offset`）报 `NameError: offset` ✅ | `eval` 出来的生成器**没有闭包** ✅ —— 外层名字按**全局**查 ✅ | 求值作用域 = `globals + 外层局部` ✅（只给 locals 不行 ✅） |
+
 ## 追加：元数据保真 ✅（docstring / 签名 / qualname ✅）
 
 | # | 现象 | 根因 | 修法 |

@@ -122,6 +122,22 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+def genexp_source(name: str, elt_src: str, gen_texts) -> str:
+    """合成**生成器函数**源码 ✅ —— 最外层可迭代对象由参数传入 ✅（立即求值 ✅）。"""
+    nl = chr(10)
+    lines = ["def " + name + "(_cratix_it):"]
+    depth = 1
+    for index, (target_src, iter_src, ifs) in enumerate(gen_texts):
+        iterable = "_cratix_it" if index == 0 else "(" + iter_src + ")"
+        lines.append("    " * depth + "for " + target_src + " in " + iterable + ":")
+        depth += 1
+        for cond in ifs:
+            lines.append("    " * depth + "if not (" + cond + "):")
+            lines.append("    " * (depth + 1) + "continue")
+    lines.append("    " * depth + "yield (" + elt_src + ")")
+    return nl.join(lines) + nl
+
+
 def trampoline_source(tb_name: str, private: str, params) -> str:
     """生成**跳板函数**源码 ✅ —— 能给出真实签名时就用真实签名 ✅。
 
@@ -322,7 +338,7 @@ def module_body_parts(gen: FunctionGen):
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
                                  key_names: list, module_gen=None, alias_init: str | None = None,
                                  fallback_code: dict | None = None, classes: list | None = None,
-                                 consts=None, func_meta=None) -> str:
+                                 consts=None, func_meta=None, genexps=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -383,6 +399,15 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     for key in sorted(set(key_names)):
         out.append("    cratix_key_" + c_ident(key) + " = PyUnicode_InternFromString(" + q + key + q + ");")
         out.append("    if (cratix_key_" + c_ident(key) + " == NULL) return -1;")
+    # **生成器表达式的辅助函数** ✅ —— 必须在 `cratix_globals` 就绪**之后** ✅、
+    # 模块体与类创建**之前** ✅（装饰器/模块体都可能用到 ✅）；
+    # 放在 globals 之前实测报 "globals must be a real dict" ✅
+    for gen_name in sorted(genexps or {}):
+        out.append("    {")
+        out.append("        PyObject *cratix_g = PyRun_String(" + c_string(genexps[gen_name]) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        if (cratix_g == NULL) return -1;")
+        out.append("        Py_DECREF(cratix_g);")
+        out.append("    }")
     if module_gen is not None:
         out.extend(body_lines)
         out.extend(body_cleanup)
@@ -747,6 +772,8 @@ class FunctionGen:
         self.declared_attrs: set = set()
         self.try_blocks: list = []
         self.with_blocks: list = []
+        # **生成器表达式的辅助函数** ✅（名字 -> 源码 ✅ —— 模块 init 里建出来 ✅）
+        self.genexp_sources: dict = {}
         # **推导式作用域栈** ✅ —— 每层推导式一个 {名字: C 临时变量} ✅
         # （Python 3 的推导式有**独立作用域** ✅ -> 目标名不能污染函数局部 ✅）
         self.comp_scopes: list = []
@@ -1627,6 +1654,9 @@ class FunctionGen:
         if kind in ("listcomp", "setcomp", "dictcomp"):
             self.emit_comprehension(node, t, kind)
             return t
+        if kind == "genexp":
+            self.emit_genexp(node, t)
+            return t
         raise Unsupported("表达式：" + kind)
     def emit_compare(self, node, t) -> None:
         """比较链 ✅（短路 ✅ —— 中间的值只求值一次 ✅）。"""
@@ -1958,6 +1988,82 @@ class FunctionGen:
         else:
             spec_str = self.emit_expr(spec)
             self.emit(t + " = cratix_format(" + base + ", " + spec_str + ");")
+        self.emit("if (" + t + " == NULL) goto cratix_error;")
+
+    def _genexp_names(self, node) -> set:
+        """收集生成器表达式里**读到的名字** ✅（不含它自己的目标 ✅）。"""
+        out = set()
+
+        def walk(ir_node):
+            if ir_node is None or not hasattr(ir_node, "kind"):
+                return
+            if ir_node.kind == "name":
+                out.add(ir_node.get("id"))
+                return
+            for kid in ir_node.kids:
+                if isinstance(kid, tuple):
+                    for item in kid:
+                        if isinstance(item, list):
+                            for sub in item:
+                                walk(sub)
+                        else:
+                            walk(item)
+                else:
+                    walk(kid)
+
+        walk(node.kids[0])
+        targets = set()
+        gens = node.kids[1:]
+        # **最外层的可迭代对象在外层作用域求值** ✅ -> 它里面的名字不算"捕获" ✅
+        for index, (target, iterable, ifs) in enumerate(gens):
+            if index > 0:
+                walk(iterable)
+            for cond in ifs:
+                walk(cond)
+        for target, _iterable, _ifs in node.kids[1:]:
+            names = []
+            self._comp_target_names(target, names)
+            targets.update(names)
+        return out - targets
+
+    def emit_genexp(self, node, t) -> None:
+        """生成器表达式 ✅ —— **真惰性** ✅（产出一个真生成器对象 ✅）。
+
+        **为什么用"合成源码"** ✅：C 层要自己实现生成器的状态机 ✅（暂停/恢复 ✅）工作量巨大 ✅；
+        而 CPython 本来就支持生成器函数 ✅ —— 我们在**模块 init 里建出这个函数** ✅
+        （`PyRun_String` ✅），调用点只把**最外层可迭代对象**传进去 ✅。
+        Python 语义 ✅：最外层可迭代对象**立即求值** ✅，其余部分**惰性** ✅ —— 与真生成器表达式一致 ✅。
+        """
+        gens = node.kids[1:]
+        if not gens:
+            raise Unsupported("空生成器表达式")
+        # **引用外层局部变量** ✅ -> 合不出来 ✅（合成函数是模块级的 ✅ 看不见函数局部 ✅）-> 整函数回退 ✅
+        outer = self._genexp_names(node)
+        captured = outer & (self.scope.locals_ | set(self.scope.free))
+        if captured:
+            raise Unsupported(
+                "生成器表达式引用了外层局部变量（" + ", ".join(sorted(captured)[:3]) + "）"
+            )
+        text = node.get("text") or {}
+        elt_src = text.get("elt")
+        gen_texts = text.get("gens") or []
+        if not elt_src or len(gen_texts) != len(gens):
+            raise Unsupported("生成器表达式缺少源码片段")
+        name = "cratix_gen_" + c_ident(self.func_name)
+        index = 0
+        while name in self.genexp_sources:
+            index += 1
+            name = "cratix_gen_" + c_ident(self.func_name) + "_" + str(index)
+        self.genexp_sources[name] = genexp_source(name, elt_src, gen_texts)
+        # **最外层可迭代对象立即求值** ✅
+        first_iter = self.emit_expr(gens[0][1])
+        helper = self.new_tmp()
+        self.emit(helper + " = PyDict_GetItemString(cratix_globals, " + c_string(name) + ");")
+        self.emit("if (" + helper + " == NULL) {")
+        self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: generator helper missing\");")
+        self.emit("    goto cratix_error;")
+        self.emit("}")
+        self.emit(t + " = PyObject_CallOneArg(" + helper + ", " + first_iter + ");")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
 
     def comp_var(self, name: str):

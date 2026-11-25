@@ -52,6 +52,13 @@ CASES = [
     ("corpus_comprehensions.py", "filtered_multi", [([1, 2, 3],)]),
     ("corpus_comprehensions.py", "shadowed", [([1, 2],)]),
     ("corpus_comprehensions.py", "str_join", [(["a", "bb", "ccc"],)]),
+    # 生成器表达式 ✅（惰性 ✅）
+    ("corpus_genexp.py", "total", [([1, 2, 3],)]),
+    ("corpus_genexp.py", "filtered", [([1, 2, 3, 4],)]),
+    ("corpus_genexp.py", "nested", [([[1, 2], [3]],)]),
+    ("corpus_genexp.py", "passthrough", [()]),
+    ("corpus_genexp.py", "shadowed", [([1, 22],)]),
+    ("corpus_genexp.py", "captured", [([1, 2], 10)]),
 ]
 
 

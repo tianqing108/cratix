@@ -264,9 +264,30 @@ def build_expr(node: ast.expr) -> ir.Node:
             kids.append(build_expr(v))
         return ir.node("dict", *kids)
     if isinstance(node, ast.GeneratorExp):
-        # 生成器表达式要**惰性** ✅ -> 需要真生成器对象 ✅（留待后续 ✅）；
-        # 整函数回退 ✅ 语义完整 ✅（不静默 ✅）。
-        raise Unsupported("生成器表达式（整函数回退）")
+        # **生成器表达式** ✅：真的要"惰性" ✅ -> 必须产出一个**真生成器对象** ✅。
+        # 做法 ✅：把生成器函数**源码**带进 IR ✅（`ast.unparse` ✅ 不依赖源文件 ✅），
+        # 由 C 后端在模块 init 里建出这个函数 ✅，调用点只负责传**最外层可迭代对象** ✅。
+        gens = []
+        texts = []
+        for g in node.generators:
+            if g.is_async:
+                raise Unsupported("异步生成器表达式")
+            gens.append((
+                build_expr(g.target),
+                build_expr(g.iter),
+                [build_expr(c) for c in g.ifs],
+            ))
+            texts.append((
+                ast.unparse(g.target),
+                ast.unparse(g.iter),
+                [ast.unparse(c) for c in g.ifs],
+            ))
+        return ir.node(
+            "genexp",
+            build_expr(node.elt),
+            *gens,
+            text={"elt": ast.unparse(node.elt), "gens": texts},
+        )
     if isinstance(node, (ast.ListComp, ast.SetComp)):
         gens = []
         for g in node.generators:

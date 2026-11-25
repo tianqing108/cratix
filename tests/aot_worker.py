@@ -143,6 +143,23 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_genexp(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_genexp.py", "cratix_corpus_genexp", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "helpers": sorted(mc.genexp_sources),
+        "total": mod.total([1, 2, 3]),
+        "filtered": mod.filtered([1, 2, 3, 4]),
+        "nested": mod.nested([[1, 2], [3]]),
+        "lazy": list(mod.lazy(range(10000000))),
+        "passthrough": list(mod.passthrough()),
+        "shadowed": list(mod.shadowed([1, 22])),
+        "captured": mod.captured([1, 2], 10),
+        "holder": mod.Holder([1, 2]).result(),
+    }
+
+
 def op_metadata(out_dir: Path) -> dict:
     """**元数据保真** ✅ —— 源码与 AOT 逐字段比对 ✅。"""
     import importlib.util
@@ -270,6 +287,8 @@ def main() -> int:
             data = op_leaks(out_dir)
         elif op == "metadata":
             data = op_metadata(out_dir)
+        elif op == "genexp":
+            data = op_genexp(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

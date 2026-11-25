@@ -158,6 +158,25 @@ class FunctionFallbackTest(unittest.TestCase):
             self.fail("元数据与源码不一致：" + chr(10) + detail)
         self.assertGreaterEqual(data["fields"], 8)
 
+    def test_10_generator_expressions(self):
+        """生成器表达式 ✅ —— **真惰性** ✅，且引用外层局部变量时整函数回退 ✅。"""
+        data = run_worker("genexp")
+        # 只有"引用外层局部变量"的那个回退 ✅
+        self.assertEqual(data["fallback"], ["captured"])
+        for name in ("total", "filtered", "nested", "lazy", "passthrough", "shadowed", "result"):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        self.assertTrue(data["helpers"], "应当合成生成器辅助函数")
+        # 值与源码一致 ✅
+        self.assertEqual(data["total"], 9)
+        self.assertEqual(data["filtered"], 7)
+        self.assertEqual(data["nested"], 6)
+        # **惰性证据** ✅：range(10000000) 只取前 3 个 ✅（先算完会跑很久 ✅）
+        self.assertEqual(data["lazy"], [0, 1, 4])
+        self.assertEqual(data["passthrough"], [0, 1, 2, 3])
+        self.assertEqual(data["shadowed"], [3, "outer"])
+        self.assertEqual(data["captured"], 23)
+        self.assertEqual(data["holder"], 6)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

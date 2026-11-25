@@ -57,6 +57,7 @@ KIND_FIELDS = {
     "listcomp": (),                          # kids: [elt, (target, iter, ifs)...]
     "dictcomp": (),                          # kids: [key, value, (target, iter, ifs)...]
     "setcomp": (),                           # kids: [elt, (target, iter, ifs)...]
+    "genexp": ("text",),                     # kids: [elt, (target, iter, ifs)...] ✅ text 是源码片段 ✅
     "lambda": (),                            # kids: [params, body]
     "joinedstr": (),                         # kids: [values...]
     "formattedvalue": ("conversion", "format_spec"),   # kids: [value]

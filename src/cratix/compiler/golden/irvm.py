@@ -451,6 +451,8 @@ class Interpreter:
             return out
         if kind in ("listcomp", "setcomp", "dictcomp"):
             return self._eval_comprehension(node, frame)
+        if kind == "genexp":
+            return self._eval_genexp(node, frame)
         if kind == "joinedstr":
             parts = []
             for child in node.kids:
@@ -478,6 +480,35 @@ class Interpreter:
         if kind == "starred":
             return self.eval(node.kids[0], frame)
         raise NotImplementedError("IR 表达式未实现：" + kind)
+
+    def _eval_genexp(self, node, frame):
+        """生成器表达式 ✅ —— **真生成器** ✅（惰性 ✅）。
+
+        做法 ✅：用 IR 里带的源码片段**合成表达式** ✅ 再 `eval` ✅ ——
+        最外层可迭代对象已按 Python 语义**立即求值** ✅，塞进临时名字 ✅。
+        """
+        text = node.get("text") or {}
+        elt_src = text.get("elt")
+        gen_texts = text.get("gens") or []
+        gens = list(node.kids[1:])
+        if not elt_src or len(gen_texts) != len(gens):
+            raise NotImplementedError("生成器表达式缺少源码片段")
+        parts = []
+        for index, (target_src, iter_src, ifs) in enumerate(gen_texts):
+            iterable = "__cratix_it0" if index == 0 else "(" + iter_src + ")"
+            parts.append(" for " + target_src + " in " + iterable)
+            for cond in ifs:
+                parts.append(" if " + cond)
+        source = "(" + elt_src + "".join(parts) + ")"
+        first = self.eval(gens[0][1], frame)
+        # **外层局部也要可见** ✅（生成器表达式可以捕获外层变量 ✅）——
+        # 只给 globals 会让 `x + offset` 里的 offset 报 NameError ✅（实测 ✅）。
+        # **eval 里的生成器没有"闭包"** ✅ —— 外层名字会被当成**全局**查 ✅，
+        # 所以要把外层局部并进求值作用域 ✅（只放 locals 仍然 NameError ✅ 实测 ✅）。
+        scope = dict(self.globals)
+        scope.update(frame.locals)
+        scope["__cratix_it0"] = first
+        return eval(source, scope, scope)  # noqa: S307 - 受控源码 ✅
 
     def _eval_comprehension(self, node, frame):
         kind = node.kind

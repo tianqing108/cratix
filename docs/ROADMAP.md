@@ -7,7 +7,7 @@
 | M0 骨架 + vendor | 仓库结构、vendor 打包半边并去业务化、统一改名、CLI deps/build | 示例工程产出 onefile exe 并运行成功；两次构建 sha256 一致；构建链无第三方编译器 | 1 周 | ✅ 完成 |
 | M1 运行期 + 双形态 | 纯 Python 引导模块(.pyc 兜底)、stub 改造 D1–D8、onedir 目录版 | onefile 零落盘；onedir 可用；verify --no-console 通过 | 1.5 周 | ✅ 完成 |
 | M2 AOT 内核 | IR / 作用域 / 子集判定 / 黄金模型 / C 后端 / MSVC 驱动 / 接入打包链 / 双进程探针 / 函数级回退 | 编译产物与源码行为等价；产物里能加载 AOT 模块 | 4 周 | ✅ 完成 |
-| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类 ✅ + try/except ✅ + with ✅ + 循环 else ✅ + 装饰器 ✅ + property ✅ + 推导式 ✅ 完成**；生成器表达式待做 |
+| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | ✅ **完成**：类 ✅ / try-except ✅ / with ✅ / 循环 else ✅ / 装饰器 ✅ / property ✅ / 推导式 ✅ / **生成器表达式 ✅** / 元数据保真 ✅ |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | ✅ 完成（AOT 增量 ✅ 热构建 3.3s ✅；report.json ✅；可复现 ✅）|
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | 🟡 **基准已建立** ✅（实测 0.69× ✅ 诚实记录 ✅）；提速待做 ✅ |
 | M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | 🟡 **接口 ✅ + 占位 ✅ + Windows 全走接口 ✅ 完成**；真实 Linux/macOS 实现未做 |
@@ -273,6 +273,24 @@
 接口完整性 ✅、占位平台对**每个**接口调用都必须抛 `PlatformUnsupported` ✅、
 未知平台明确报错 ✅、**源码守卫**（pipeline/cli/driver 里不许再出现 `stubbuild.` / `sysdll.` / `verify.` ✅ 且必须调用 `platforms.current()` ✅）。
 端到端 ✅：示例工程仍然构建成功 ✅、两次构建 sha256 一致 ✅、`verify --zero-disk` 走平台接口 PASS ✅。
+
+## M3 追加：生成器表达式 ✅（M3 收尾）
+
+**为什么难** ✅：生成器要**真惰性** ✅（暂停/恢复 ✅）—— 在 C 里手写状态机工作量巨大 ✅。
+
+**做法** ✅：`PyRun_String` **合成生成器函数** ✅ ——
+IR 里带上源码片段（`ast.unparse` ✅ 不依赖源文件 ✅），
+C 后端在模块 init 里建出这个函数 ✅，调用点只把**最外层可迭代对象**传进去 ✅。
+Python 语义正好对上 ✅：最外层可迭代对象**立即求值** ✅，其余**惰性** ✅。
+
+**边界（诚实记录 ✅）**：合成函数是**模块级**的 ✅ —— 所以生成器表达式一旦**引用外层局部变量** ✅
+（`sum(x + offset for x in items)` ✅），就合不出来 ✅ → **整函数回退** ✅（语义仍然正确 ✅）。
+检查用 `scope.locals_ | scope.free` ✅，并且**跳过最外层可迭代对象**里的名字 ✅
+（它本来就在外层作用域求值 ✅，`sum(x for x in items)` 里的 `items` 不算捕获 ✅）。
+
+**实测** ✅（`tests/corpus/corpus_genexp.py` ✅）：7/8 个函数 AOT 化 ✅、
+`lazy` 用 `range(10000000)` 只取前 3 个 ✅（**惰性证据** ✅ —— 先算完会跑很久 ✅）、
+引用外层局部的 `captured` 自动回退 ✅ 且值正确 ✅。
 
 ## 下一步
 
