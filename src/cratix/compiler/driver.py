@@ -326,6 +326,28 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             result.module_ok = False
             result.module_reason = exc.reason
             return result
+        # **直调优化需要的静态事实** ✅：
+        # 1. 本类**已经生成完**的方法 ✅（名字 -> C 函数名 ✅ —— 只认已生成的 ✅，避免引用未定义符号 ✅）；
+        # 2. 被 `self.X = ...` 写过的属性 ✅（写过的**不能**直调同名方法 ✅）。
+        generated_methods: dict = {}
+        self_attr_writes = set()
+        for entry in stmt.body:
+            if not isinstance(entry, ast.FunctionDef):
+                continue
+            for child in ast.walk(entry):
+                if isinstance(child, ast.Assign):
+                    targets = list(child.targets)
+                elif isinstance(child, (ast.AugAssign, ast.AnnAssign)):
+                    targets = [child.target]
+                else:
+                    continue
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
+                        self_attr_writes.add(target.attr)
         class_info = {
             "name": stmt.name,
             "doc": _doc_of(stmt),
@@ -357,6 +379,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         built.get("body", []),
                         method_scope,
                         consts,
+                        class_methods=generated_methods,
+                        self_attr_writes=self_attr_writes,
                     )
                     gen.emit_binding()
                     for body_stmt in built.get("body", []):
@@ -374,6 +398,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
                 class_info["methods"].append((item.name, gen))
+                # **生成成功后**才登记 ✅（后面生成的兄弟方法可以直调它 ✅）
+                generated_methods[item.name] = "cratix_fn_" + codegen.c_ident(stmt.name + "." + item.name)
                 result.genexp_sources.update(gen.genexp_sources)
                 # **方法元数据** ✅：doc + 类名限定的 qualname ✅
                 result.func_meta[stmt.name + "." + item.name] = {

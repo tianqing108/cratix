@@ -39,6 +39,9 @@ CASES = [
     # **常量池** ✅：循环里的字面量 ✅（字符串/bytes 每次新建会明显变慢 ✅）
     ("corpus_consts", "loop_str", (2000,), 100),
     ("corpus_consts", "loop_num", (2000,), 100),
+    # **类密集** ✅（属性读 + 方法调用 ✅ —— 历史最弱的一块 ✅）
+    ("corpus_methods", "self_calls", (2000,), 100),
+    ("corpus_methods", "attribute_reads", (2000,), 100),
 ]
 
 

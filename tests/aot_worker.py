@@ -143,6 +143,19 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_methods(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_methods.py", "cratix_corpus_methods", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "self_calls": mod.self_calls(10),
+        "shadow_calls": mod.shadow_calls(10),
+        "attribute_reads": mod.attribute_reads(10),
+        "direct_used": "cratix_fn_v_Machine_step(" in mc.c_source,
+        "shadow_direct": "cratix_fn_v_Shadowed_step(" in mc.c_source,
+    }
+
+
 def op_genexp(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_genexp.py", "cratix_corpus_genexp", out_dir)
     return {
@@ -289,6 +302,8 @@ def main() -> int:
             data = op_metadata(out_dir)
         elif op == "genexp":
             data = op_genexp(out_dir)
+        elif op == "methods":
+            data = op_methods(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

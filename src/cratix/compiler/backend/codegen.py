@@ -755,8 +755,15 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
 class FunctionGen:
     """生成一个函数的 C 代码 ✅。"""
 
-    def __init__(self, func_name, params, body, scope, consts=None, use_pool=True):
+    def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
+                 class_methods=None, self_attr_writes=None):
         self.func_name = func_name
+        # **直调优化** ✅：本类已 AOT 的方法（名字 -> C 函数名 ✅）与"被赋过值的 self 属性" ✅。
+        # 只有**没被 self.X = ... 覆盖**的方法才敢直调 ✅（否则会绕过实例属性 ✅ -> 语义偏差 ✅）。
+        # **保持引用** ✅（不复制 ✅）—— 类方法是一个个生成的 ✅，
+        # 复制的话后面生成的兄弟方法看不见 ✅（直调只能用到"已经生成"的 ✅，避免引用未定义符号 ✅）。
+        self.class_methods = class_methods if class_methods is not None else {}
+        self.self_attr_writes = set(self_attr_writes or ())
         # **常量池** ✅（同一模块的生成器共用一个 ✅ —— 见 driver ✅）
         self.consts = consts if consts is not None else ConstantPool()
         # **A/B 开关** ✅：关掉就退回"每次新建" ✅（基准对照用 ✅，产品默认开 ✅）
@@ -827,7 +834,9 @@ class FunctionGen:
         pass
         self.emit("PyObject *cratix_kw = NULL;")
         self.emit("PyObject *cratix_kwv = NULL;")
-        self.emit("if (kwargs != NULL) {")
+        # **空 kwargs 不复制** ✅ —— 类方法的跳板是 `def tb(self, *args, **kwargs)` ✅，
+        # 调它时 kwargs 永远是个 dict ✅（哪怕是空 dict ✅）→ 每次都 PyDict_Copy ✅（一次真分配 ✅）。
+        self.emit("if (kwargs != NULL && PyDict_GET_SIZE(kwargs) > 0) {")
         self.emit("    cratix_kw = PyDict_Copy(kwargs);")
         self.emit("    if (cratix_kw == NULL) goto cratix_error;")
         self.emit("}")
@@ -1737,6 +1746,30 @@ class FunctionGen:
         n = n_pos + n_kw
         if n + 1 > MAX_VECTORCALL_ARGS:
             return False
+        # **直调本类方法** ✅ —— `self.foo(...)` ✅、foo 已 AOT ✅、且没被实例属性覆盖 ✅、无关键字/解包 ✅
+        direct = self.class_methods.get(target.get("attr"))
+        if (
+            direct
+            and target.kids[0].kind == "name"
+            and target.kids[0].get("id") == "self"
+            and target.get("attr") not in self.self_attr_writes
+            and not keywords
+        ):
+            receiver = self.emit_expr(target.kids[0])
+            arg_vals = [self.emit_expr(child) for child in positional]
+            args_tuple = self.new_tmp()
+            self.emit(args_tuple + " = PyTuple_New(" + str(len(arg_vals) + 1) + ");")
+            self.emit("if (" + args_tuple + " == NULL) goto cratix_error;")
+            self.emit("Py_INCREF(" + receiver + ");")
+            self.emit("PyTuple_SET_ITEM(" + args_tuple + ", 0, " + receiver + ");")
+            for index, value in enumerate(arg_vals):
+                self.emit("Py_INCREF(" + value + ");")
+                self.emit("PyTuple_SET_ITEM(" + args_tuple + ", " + str(index + 1) + ", " + value + ");")
+            self.emit(t + " = " + direct + "(" + receiver + ", " + args_tuple + ", NULL);")
+            self.emit("Py_DECREF(" + args_tuple + ");")
+            self.emit(args_tuple + " = NULL;")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
         obj = self.emit_expr(target.kids[0])
         # **先把所有参数求值完** ✅ 再填 vargs ✅ ——
         # vargs 是**函数级共享**的 ✅；参数表达式里若再发生方法调用 ✅ -> 会覆盖已填好的槽位 ✅

@@ -177,6 +177,19 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["captured"], 23)
         self.assertEqual(data["holder"], 6)
 
+    def test_11_self_method_calls(self):
+        """**self 方法直调** ✅：安全前提不满足时必须退回属性查找 ✅。"""
+        data = run_worker("methods")
+        self.assertEqual(data["fallback"], [])
+        # 值必须与源码一致 ✅
+        self.assertEqual(data["self_calls"], sum(1 + i for i in range(10)))
+        self.assertEqual(data["shadow_calls"], sum(10 - i for i in range(10)))
+        self.assertEqual(data["attribute_reads"], sum(2 + 4 for _ in range(10)))
+        # **直调生效** ✅（`run` 里 `self.step(...)` 被编成直接调用 ✅）
+        self.assertTrue(data["direct_used"], "self.step 应当走直调")
+        # **被实例属性覆盖过的方法不许直调** ✅（否则会绕过覆盖 ✅）
+        self.assertFalse(data["shadow_direct"], "被覆盖的 self.step 不应直调")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
