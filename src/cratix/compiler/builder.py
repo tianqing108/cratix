@@ -263,6 +263,10 @@ def build_expr(node: ast.expr) -> ir.Node:
             kids.append(build_expr(k) if k is not None else None)
             kids.append(build_expr(v))
         return ir.node("dict", *kids)
+    if isinstance(node, ast.GeneratorExp):
+        # 生成器表达式要**惰性** ✅ -> 需要真生成器对象 ✅（留待后续 ✅）；
+        # 整函数回退 ✅ 语义完整 ✅（不静默 ✅）。
+        raise Unsupported("生成器表达式（整函数回退）")
     if isinstance(node, (ast.ListComp, ast.SetComp)):
         gens = []
         for g in node.generators:

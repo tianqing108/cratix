@@ -103,6 +103,29 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["box_ops"], "(10, 'box:5', 2, 7, 10, 5)")
         self.assertEqual(data["marked_ops"], "(True, 1)")
 
+    def test_07_comprehensions(self):
+        data = run_worker("comprehensions")
+        # **多生成器 / 解包 / 嵌套都能 AOT** ✅（原来是"整函数回退" ✅）
+        for name in (
+            "single", "multi", "nested", "unpack", "dict_multi", "scoped",
+            "self_iter", "setcomp_cond", "filtered_multi", "shadowed", "str_join",
+        ):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        # 与源码逐字一致 ✅
+        self.assertEqual(data["single"], "[9, 4]")
+        self.assertEqual(data["multi"], "[(1, 2), (1, 3), (2, 3)]")
+        self.assertEqual(data["nested"], "[[2, 4], [6]]")
+        self.assertEqual(data["unpack"], "[3, 7]")
+        self.assertEqual(data["dict_multi"], "{'a': ['a1', 'a2']}")
+        # **独立作用域** ✅：外层的 x 不被推导式改写 ✅
+        self.assertEqual(data["scoped"], "([1, 2], 100)")
+        # 最外层可迭代对象用外层作用域求值 ✅
+        self.assertEqual(data["self_iter"], "[1, 2, 3]")
+        self.assertEqual(data["setcomp_cond"], "{1, 2}")
+        self.assertEqual(data["filtered_multi"], "[2, 4, 6, 3, 6, 9]")
+        self.assertEqual(data["shadowed"], "([[1, 2], [1, 2]], 'outer')")
+        self.assertEqual(data["str_join"], "'BB-CCC'")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

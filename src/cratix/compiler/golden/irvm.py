@@ -485,20 +485,43 @@ class Interpreter:
         gens = list(node.kids[offset:])
         results = []
         mapping = {}
+        # **独立作用域** ✅（Python 3 ✅）—— 赋值落在推导式自己的帧里 ✅，不污染函数局部 ✅。
+        # 外层局部要**可见** ✅ -> 复制一份（读回退到 globals/内建 ✅）。
+        comp_frame = _Frame(frame.globals, dict(frame.locals))
+
+        def target_names(target, acc):
+            """收集目标名 ✅ —— **必须返回 acc** ✅（调用方要迭代它 ✅）。"""
+            if target is None:
+                return acc
+            if target.kind == "name":
+                acc.append(target.get("id"))
+                return acc
+            if target.kind == "starred":
+                return target_names(target.kids[0], acc)
+            for kid in target.kids:
+                target_names(kid, acc)
+            return acc
+
+        # **先把目标名种进 locals** ✅ —— 否则新名字会被写到模块全局 ✅（泄漏 ✅）
+        for target, _iterable, _ifs in gens:
+            for name in target_names(target, []):
+                comp_frame.locals.setdefault(name, None)
 
         def rec(index):
             if index >= len(gens):
                 if kind == "dictcomp":
-                    mapping[self.eval(node.kids[0], frame)] = self.eval(node.kids[1], frame)
+                    mapping[self.eval(node.kids[0], comp_frame)] = self.eval(node.kids[1], comp_frame)
                 else:
-                    results.append(self.eval(node.kids[0], frame))
+                    results.append(self.eval(node.kids[0], comp_frame))
                 return
             target, iterable, ifs = gens[index]
-            for item in self.eval(iterable, frame):
-                self.assign_to(target, item, frame)
+            # **最外层可迭代对象在"外层作用域"求值** ✅（`[x for x in x]` ✅）
+            iter_frame = frame if index == 0 else comp_frame
+            for item in self.eval(iterable, iter_frame):
+                self.assign_to(target, item, comp_frame)
                 ok = True
                 for cond in ifs:
-                    if not truth(self.eval(cond, frame)):
+                    if not truth(self.eval(cond, comp_frame)):
                         ok = False
                         break
                 if ok:

@@ -40,6 +40,18 @@ CASES = [
     ("corpus_with.py", "loop_else_no_break", [()]),
     ("corpus_with.py", "while_else_break", [()]),
     ("corpus_with.py", "while_else_no_break", [()]),
+    # 推导式 ✅（独立作用域 ✅ / 多生成器 ✅ / 解包 ✅ / 嵌套 ✅）
+    ("corpus_comprehensions.py", "single", [([3, -1, 2],), ([],)]),
+    ("corpus_comprehensions.py", "multi", [([1, 2, 3],)]),
+    ("corpus_comprehensions.py", "nested", [([[1, 2], [3]],)]),
+    ("corpus_comprehensions.py", "unpack", [([(1, 2), (3, 4)],)]),
+    ("corpus_comprehensions.py", "dict_multi", [({"a": [1, 2]},)]),
+    ("corpus_comprehensions.py", "scoped", [([1, 2],)]),
+    ("corpus_comprehensions.py", "self_iter", [()]),
+    ("corpus_comprehensions.py", "setcomp_cond", [([1, 2, 3, 4, 5],)]),
+    ("corpus_comprehensions.py", "filtered_multi", [([1, 2, 3],)]),
+    ("corpus_comprehensions.py", "shadowed", [([1, 2],)]),
+    ("corpus_comprehensions.py", "str_join", [(["a", "bb", "ccc"],)]),
 ]
 
 

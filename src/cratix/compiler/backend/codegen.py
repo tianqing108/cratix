@@ -608,6 +608,9 @@ class FunctionGen:
         self.declared_attrs: set = set()
         self.try_blocks: list = []
         self.with_blocks: list = []
+        # **推导式作用域栈** ✅ —— 每层推导式一个 {名字: C 临时变量} ✅
+        # （Python 3 的推导式有**独立作用域** ✅ -> 目标名不能污染函数局部 ✅）
+        self.comp_scopes: list = []
         self.loop_stack: list = []
         self.loop_index = 0
         self.label_index = 0
@@ -904,6 +907,12 @@ class FunctionGen:
         kind = target.kind
         if kind == "name":
             name = target.get("id")
+            # **推导式目标** ✅ -> 写推导式的临时变量 ✅（不是函数局部 ✅）
+            comp_var = self.comp_var(name)
+            if comp_var is not None:
+                self.emit("Py_XSETREF(" + comp_var + ", " + value_var + ");")
+                self.emit(value_var + " = NULL;")
+                return
             if name in self.scope.locals_:
                 var = self.local_var(name)
                 self.emit("Py_XDECREF(" + var + ");")
@@ -1319,6 +1328,12 @@ class FunctionGen:
             return t
         if kind == "name":
             name = node.get("id")
+            # **推导式局部优先** ✅ —— 由内向外找 ✅（内层遮蔽外层 ✅）
+            comp_var = self.comp_var(name)
+            if comp_var is not None:
+                self.emit(t + " = " + comp_var + ";")
+                self.emit("Py_XINCREF(" + t + ");")
+                return t
             if name in self.scope.locals_:
                 var = self.local_var(name)
                 self.emit(t + " = " + var + ";")
@@ -1497,18 +1512,21 @@ class FunctionGen:
         if n + 1 > MAX_VECTORCALL_ARGS:
             return False
         obj = self.emit_expr(target.kids[0])
+        # **先把所有参数求值完** ✅ 再填 vargs ✅ ——
+        # vargs 是**函数级共享**的 ✅；参数表达式里若再发生方法调用 ✅ -> 会覆盖已填好的槽位 ✅
+        # （实测：`"-".join([w.upper() for w in words])` 用错接收者 ✅ -> 结果错 ✅）。
+        arg_vals = [self.emit_expr(child) for child in positional]
+        kw_vals = [(name, self.emit_expr(child)) for name, child in keywords]
         # **vargs[0] 是对象** ✅（VectorcallMethod 的约定 ✅ ✅）
         self.emit("cratix_vargs[0] = " + obj + ";")
         self.emit("Py_INCREF(cratix_vargs[0]);")
-        for i, child in enumerate(positional):
-            v = self.emit_expr(child)
+        for i, v in enumerate(arg_vals):
             self.emit("cratix_vargs[" + str(i + 1) + "] = " + v + ";")
             self.emit("Py_INCREF(cratix_vargs[" + str(i + 1) + "]);")
         if n_kw:
             self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
-            for j, (name, child) in enumerate(keywords):
-                v = self.emit_expr(child)
+            for j, (name, v) in enumerate(kw_vals):
                 self.emit("cratix_vargs[" + str(n_pos + 1 + j) + "] = " + v + ";")
                 self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + 1 + j) + "]);")
                 self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
@@ -1562,15 +1580,17 @@ class FunctionGen:
         if n > MAX_VECTORCALL_ARGS:
             self.emit_call_generic(node, func, t)
             return
-        for i, child in enumerate(positional):
-            v = self.emit_expr(child)
+        # **先把所有参数求值完** ✅ 再填 vargs ✅ —— vargs 是函数级共享的 ✅，
+        # 参数里的嵌套调用会覆盖已填好的槽位 ✅（与 emit_method_call 同一个坑 ✅）。
+        arg_vals = [self.emit_expr(child) for child in positional]
+        kw_vals = [(name, self.emit_expr(child)) for name, child in keywords]
+        for i, v in enumerate(arg_vals):
             self.emit("cratix_vargs[" + str(i) + "] = " + v + ";")
             self.emit("Py_INCREF(cratix_vargs[" + str(i) + "]);")
         if n_kw:
             self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
-            for j, (name, child) in enumerate(keywords):
-                v = self.emit_expr(child)
+            for j, (name, v) in enumerate(kw_vals):
                 self.emit("cratix_vargs[" + str(n_pos + j) + "] = " + v + ";")
                 self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + j) + "]);")
                 self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
@@ -1703,20 +1723,55 @@ class FunctionGen:
             self.emit(t + " = cratix_format(" + base + ", " + spec_str + ");")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
 
+    def comp_var(self, name: str):
+        """推导式作用域里的名字 -> C 临时变量 ✅（由内向外找 ✅）。"""
+        for scope in reversed(self.comp_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def _comp_target_names(self, target, acc) -> None:
+        """收集推导式目标里的名字 ✅（含元组解包 ✅）。"""
+        if target is None:
+            return
+        if target.kind == "name":
+            acc.append(target.get("id"))
+            return
+        if target.kind == "starred":
+            self._comp_target_names(target.kids[0], acc)
+            return
+        for kid in target.kids:
+            self._comp_target_names(kid, acc)
+
     def emit_comprehension(self, node, t, kind) -> None:
-        """推导式 ✅（v1 只支持**单个**生成器 ✅ → 多生成器整函数回退 ✅）。"""
+        """推导式 ✅ —— 支持**多生成器** / **元组解包** / **嵌套** ✅。
+
+        **作用域** ✅：Python 3 的推导式有独立作用域 ✅ -> 目标名绑到**专用临时变量** ✅，
+        读名字时由内向外查（见 comp_var ✅）—— 既不污染函数局部 ✅，
+        也不会出现"元素表达式读到未赋值的局部变量" ✅（那会直接 SystemError ✅ 实测 ✅）。
+        """
         kids = list(node.kids)
         offset = 2 if kind == "dictcomp" else 1
         gens = kids[offset:]
-        if len(gens) != 1:
-            raise Unsupported("多生成器推导式")
-        target, iterable, ifs = gens[0]
-        if target.kind != "name":
-            raise Unsupported("推导式目标解包")
-        it = self.new_helper()
-        src = self.emit_expr(iterable)
-        self.emit(it + " = PyObject_GetIter(" + src + ");")
-        self.emit("if (" + it + " == NULL) goto cratix_error;")
+        if not gens:
+            raise Unsupported("空推导式")
+        names: list = []
+        for target, _iterable, _ifs in gens:
+            self._comp_target_names(target, names)
+        if not names:
+            raise Unsupported("推导式目标里没有名字")
+        scope = {}
+        for name in names:
+            if name not in scope:
+                scope[name] = self.new_tmp()
+        # **最外层的可迭代对象在"外层作用域"求值** ✅ ——
+        # `[x for x in x]` 里的第一个 x 是外层变量 ✅（先压作用域会读错 ✅）。
+        self.emit("/* --- 推导式（独立作用域 ✅）--- */")
+        src = self.emit_expr(gens[0][1])
+        self.comp_scopes.append(scope)
+        first_it = self.new_helper()
+        self.emit(first_it + " = PyObject_GetIter(" + src + ");")
+        self.emit("if (" + first_it + " == NULL) goto cratix_error;")
         if kind == "dictcomp":
             self.emit(t + " = PyDict_New();")
         elif kind == "setcomp":
@@ -1724,31 +1779,42 @@ class FunctionGen:
         else:
             self.emit(t + " = PyList_New(0);")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
+        self.emit_comp_level(gens, 0, t, kind, kids, first_it)
+        self.comp_scopes.pop()
+
+    def emit_comp_level(self, gens, index, t, kind, kids, iterator: str) -> None:
+        """一层生成器 ✅ —— 多生成器就是**嵌套循环** ✅（后面的可以引用前面的目标 ✅）。"""
+        target, _iterable, ifs = gens[index]
         self.emit("while (1) {")
         item = self.new_tmp()
-        self.emit("    " + item + " = PyIter_Next(" + it + ");")
+        self.emit("    " + item + " = PyIter_Next(" + iterator + ");")
         self.emit("    if (" + item + " == NULL) { if (PyErr_Occurred()) goto cratix_error; break; }")
-        # 推导式有**独立作用域** ✅ → 目标绑到临时变量 ✅（不污染函数局部 ✅）
-        bind = self.new_tmp()
-        self.emit("    " + bind + " = " + item + ";")
-        self.emit("    Py_INCREF(" + bind + ");")
-        self.emit("    " + item + " = NULL;")
+        self.emit_assign(target, item)
         for cond in ifs:
             c = self.emit_expr(cond)
             self.emit("    if (!cratix_truth(" + c + ")) continue;")
-        if kind == "dictcomp":
+        if index + 1 < len(gens):
+            src = self.emit_expr(gens[index + 1][1])
+            inner = self.new_helper()
+            self.emit("    " + inner + " = PyObject_GetIter(" + src + ");")
+            self.emit("    if (" + inner + " == NULL) goto cratix_error;")
+            self.emit_comp_level(gens, index + 1, t, kind, kids, inner)
+            self.emit("    Py_DECREF(" + inner + ");")
+            self.emit("    " + inner + " = NULL;")
+        elif kind == "dictcomp":
             k = self.emit_expr(kids[0])
             v = self.emit_expr(kids[1])
-            self.emit("    if (PyDict_SetItem(" + t + ", " + k + ", " + v + ") < 0) goto cratix_error;")
+            self.emit("        if (PyDict_SetItem(" + t + ", " + k + ", " + v + ") < 0) goto cratix_error;")
         else:
             elt = self.emit_expr(kids[0])
             if kind == "setcomp":
-                self.emit("    if (PySet_Add(" + t + ", " + elt + ") < 0) goto cratix_error;")
+                self.emit("        if (PySet_Add(" + t + ", " + elt + ") < 0) goto cratix_error;")
             else:
-                self.emit("    if (PyList_Append(" + t + ", " + elt + ") < 0) goto cratix_error;")
+                self.emit("        if (PyList_Append(" + t + ", " + elt + ") < 0) goto cratix_error;")
         self.emit("}")
-        self.emit("Py_DECREF(" + it + ");")
-        self.emit(it + " = NULL;")
+        if index == 0:
+            self.emit("Py_DECREF(" + iterator + ");")
+            self.emit(iterator + " = NULL;")
 
 def target_attr(node) -> str:
     return node.get("attr")

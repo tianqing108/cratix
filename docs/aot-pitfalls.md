@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：推导式 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 38 | 推导式一调用就 `SystemError: bad argument to internal function` ✅（object.c ✅） | 循环值绑到**临时变量** ✅，但元素/条件里的名字解析成**函数局部**（从未赋值 ✅ = NULL ✅）→ 把 NULL 交给 `PyNumber_Multiply` ✅ | 推导式建**独立作用域** ✅：目标名 → 专用临时变量 ✅，读名字**由内向外**查 ✅ |
+| 39 | `"-".join([w.upper() for w in words])` 返回 `BBcccCCC` ✅（分隔符变成了 `ccc` ✅） | `cratix_vargs` 是**函数级共享**数组 ✅；方法调用**先填 vargs[0] ✅ 再求参数** ✅ -> 参数里的嵌套调用**覆盖**了接收者槽位 ✅ | **先把所有参数求值完** ✅ 再填 vargs ✅（方法调用 + 函数调用两处 ✅） |
+| 40 | 推导式改写外层同名变量 ✅（`x = 100; [x for x in xs]` 之后 x 变了 ✅） | 推导式目标直接写函数局部 ✅ | 目标只写推导式作用域的临时变量 ✅；**最外层可迭代对象**仍在外层作用域求值 ✅ |
+
 **类方法的装饰器怎么做** ✅：原生方法照常 AOT ✅ → 生成**跳板函数**（真 Python 函数 ✅）→
 在建类时按**逆序**调用装饰器 ✅（`PyRun_String(expr, Py_eval_input)` 求值 + `PyObject_CallOneArg` 应用 ✅）→
 结果放进类命名空间 ✅。于是 `property` / `staticmethod` / `classmethod` / 自定义装饰器**全部走同一机制** ✅。

@@ -113,6 +113,25 @@ def op_with(out_dir: Path) -> dict:
     }
 
 
+def op_comprehensions(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_comprehensions.py", "cratix_corpus_comp", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "single": repr(mod.single([3, -1, 2])),
+        "multi": repr(mod.multi([1, 2, 3])),
+        "nested": repr(mod.nested([[1, 2], [3]])),
+        "unpack": repr(mod.unpack([(1, 2), (3, 4)])),
+        "dict_multi": repr(mod.dict_multi({"a": [1, 2]})),
+        "scoped": repr(mod.scoped([1, 2])),
+        "self_iter": repr(mod.self_iter()),
+        "setcomp_cond": repr(mod.setcomp_cond([1, 2, 3, 4, 5])),
+        "filtered_multi": repr(mod.filtered_multi([1, 2, 3])),
+        "shadowed": repr(mod.shadowed([1, 2])),
+        "str_join": repr(mod.str_join(["a", "bb", "ccc"])),
+    }
+
+
 def op_decorators(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_decorators.py", "cratix_corpus_dec", out_dir)
     return {
@@ -158,6 +177,8 @@ def main() -> int:
             data = op_with(out_dir)
         elif op == "decorators":
             data = op_decorators(out_dir)
+        elif op == "comprehensions":
+            data = op_comprehensions(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001
