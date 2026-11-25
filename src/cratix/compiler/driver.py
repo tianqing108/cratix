@@ -120,6 +120,28 @@ def _module_code_objects(source: str, filename: str) -> dict:
                 continue
     return out
 
+def _compiler_source_digest() -> str:
+    """**编译器自身的代码摘要** ✅ —— 改了编译器就该重编 ✅（#140 ✅）。
+
+    `COMPILER_VERSION` 是**手写常量** ✅ —— 改代码忘了改它 ✅ 就会复用**旧的 .pyd** ✅
+    （实测：命名空间清理之后重新构建 ✅ 探针拿到的还是旧产物 ✅ 报了一堆已经修好的"泄漏" ✅）。
+    这里直接对**编译器包里的 .py** 取摘要 ✅ —— 改一个字节就变 ✅。
+    """
+    import hashlib as _hashlib
+
+    root = Path(__file__).resolve().parent
+    digest = _hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+COMPILER_SOURCE_DIGEST = _compiler_source_digest()
+
+
 def fingerprint_for(module_name: str, source: Path, options: str = "") -> str:
     """模块的编译指纹 ✅（增量编译的依据 ✅）。
 
@@ -132,6 +154,8 @@ def fingerprint_for(module_name: str, source: Path, options: str = "") -> str:
     digest = hashlib.sha256()
     digest.update(Path(source).read_bytes())
     digest.update(COMPILER_VERSION.encode("utf-8"))
+    # **编译器代码摘要** ✅ —— 只改代码不改版本号也能让缓存失效 ✅（#140 ✅）
+    digest.update(COMPILER_SOURCE_DIGEST.encode("utf-8"))
     digest.update(module_name.encode("utf-8"))
     digest.update(sys.version.encode("utf-8"))
     digest.update(sys.implementation.cache_tag.encode("utf-8"))
