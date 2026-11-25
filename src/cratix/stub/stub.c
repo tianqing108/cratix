@@ -119,6 +119,15 @@ static fn_Py_BuildValue p_Py_BuildValue = NULL;
 static fn_PyObject_SetAttrString p_PyObject_SetAttrString = NULL;
 static fn_Py_DecRef p_Py_DecRef = NULL;
 static fn_PyCapsule_GetPointer p_PyCapsule_GetPointer = NULL;
+/* **命令行参数** ✅（#127 ✅）：把 argv 变成 `sys.argv` ✅ */
+/* **不能用 `Py_ssize_t`** ✅ —— stub **不包含 Python.h** ✅（只靠 GetProcAddress 拿函数 ✅）。
+ * x64 上 `Py_ssize_t` 就是 `long long` ✅。 */
+typedef PyObject *(__cdecl *fn_PyUnicode_FromWideChar)(const wchar_t *, long long);
+typedef PyObject *(__cdecl *fn_PyList_New)(long long);
+typedef int(__cdecl *fn_PyList_SetItem)(PyObject *, long long, PyObject *);
+static fn_PyUnicode_FromWideChar p_PyUnicode_FromWideChar = NULL;
+static fn_PyList_New p_PyList_New = NULL;
+static fn_PyList_SetItem p_PyList_SetItem = NULL;
 static PyObject *p_PyExc_ImportError = NULL;   /* 数据导出：指向 PyExc_ImportError 变量 */
 static void *p_PyExc_ImportError_addr = NULL;
 
@@ -1881,6 +1890,60 @@ static const zentry_t *find_interpreter_entry(const zipidx_t *z) {
     return best;
 }
 
+/* **把命令行参数放进 `sys.argv`** ✅（#127 ✅）。
+ *
+ * **为什么必须做** ✅：冻结后的解释器根本看不到进程的 argv ✅ ——
+ * 不设的话 `sys.argv` 只有它自己编造的那一项 ✅，任何 CLI 应用都拿不到参数 ✅
+ * （`examples/notes` 一上来就踩中 ✅）。
+ *
+ * **用 `wmain` + 宽字符** ✅：Windows 的 ANSI argv 会把中文参数变成 `?` ✅。
+ * 失败**不致命** ✅：打印一行日志继续跑 ✅（参数没了总比起不来好 ✅）。
+ */
+static void cratix_set_argv(void) {
+    /* **自己取命令行** ✅ —— 不改入口点 ✅（`wmain` 要动链接器入口 ✅，实测一改就崩 ✅）。
+     * `GetCommandLineW` + `CommandLineToArgvW` ✅ 是 Windows 的标准切分 ✅。 */
+    typedef LPWSTR *(__stdcall * fn_CommandLineToArgvW)(LPCWSTR, int *);
+    HMODULE sh = GetModuleHandleW(L"shell32.dll");
+    if (!sh) sh = LoadLibraryW(L"shell32.dll");
+    fn_CommandLineToArgvW split = sh ? (fn_CommandLineToArgvW)(void *)GetProcAddress(sh, "CommandLineToArgvW") : NULL;
+    if (!split) {
+        cy_log("[stub] argv: 找不到 CommandLineToArgvW ✅ -> 跳过 ✅\n");
+        return;
+    }
+    int argc = 0;
+    wchar_t **wargv = split(GetCommandLineW(), &argc);
+    if (!wargv || argc <= 0) {
+        cy_log("[stub] argv: 切分失败 ✅\n");
+        return;
+    }
+    if (!p_PyImport_ImportModule || !p_PyList_New || !p_PyList_SetItem || !p_PyUnicode_FromWideChar) {
+        cy_log("[stub] argv: api 缺 ✅ -> 跳过 ✅\n");
+        return;
+    }
+    PyObject *sys_mod = p_PyImport_ImportModule("sys");
+    if (!sys_mod) {
+        cy_log("[stub] argv: import sys 失败 ✅\n");
+        return;
+    }
+    PyObject *list = p_PyList_New(argc > 0 ? argc : 1);
+    if (!list) {
+        cy_log("[stub] argv: PyList_New 失败 ✅\n");
+        return;
+    }
+    for (int i = 0; i < argc; i++) {
+        PyObject *item = p_PyUnicode_FromWideChar(wargv[i], -1);
+        if (!item || p_PyList_SetItem(list, i, item) < 0) {
+            cy_log("[stub] argv: 第 %d 项失败 ✅\n", i);
+            return;
+        }
+    }
+    if (p_PyObject_SetAttrString(sys_mod, "argv", list) < 0) {
+        cy_log("[stub] argv: 设置 sys.argv 失败 ✅\n");
+    } else {
+        cy_log("[stub] argv: %d 项 ✅\n", argc);
+    }
+}
+
 int main(void) {
     WCHAR self[MAX_PATH];
     char *filebuf = NULL;
@@ -2336,6 +2399,9 @@ int main(void) {
             p_PyObject_SetAttrString = (fn_PyObject_SetAttrString)GetProcAddress(hpy_disk, "PyObject_SetAttrString");
             p_Py_DecRef = (fn_Py_DecRef)GetProcAddress(hpy_disk, "Py_DecRef");
             p_PyCapsule_GetPointer = (fn_PyCapsule_GetPointer)GetProcAddress(hpy_disk, "PyCapsule_GetPointer");
+            p_PyUnicode_FromWideChar = (fn_PyUnicode_FromWideChar)GetProcAddress(hpy_disk, "PyUnicode_FromWideChar");
+            p_PyList_New = (fn_PyList_New)GetProcAddress(hpy_disk, "PyList_New");
+            p_PyList_SetItem = (fn_PyList_SetItem)GetProcAddress(hpy_disk, "PyList_SetItem");
         } else {
             p_Py_InitializeEx = (fn_Py_InitializeEx)mem_get_export(py, "Py_InitializeEx");
             p_Py_IsInitialized = (fn_Py_IsInitialized)mem_get_export(py, "Py_IsInitialized");
@@ -2366,6 +2432,9 @@ int main(void) {
             p_PyObject_SetAttrString = (fn_PyObject_SetAttrString)mem_get_export(py, "PyObject_SetAttrString");
             p_Py_DecRef = (fn_Py_DecRef)mem_get_export(py, "Py_DecRef");
             p_PyCapsule_GetPointer = (fn_PyCapsule_GetPointer)mem_get_export(py, "PyCapsule_GetPointer");
+            p_PyUnicode_FromWideChar = (fn_PyUnicode_FromWideChar)mem_get_export(py, "PyUnicode_FromWideChar");
+            p_PyList_New = (fn_PyList_New)mem_get_export(py, "PyList_New");
+            p_PyList_SetItem = (fn_PyList_SetItem)mem_get_export(py, "PyList_SetItem");
         }
         cy_log("[stub] api: init=%p isinit=%p finalize=%p run=%p errprint=%p\n",
                (void *)p_Py_InitializeEx, (void *)p_Py_IsInitialized, (void *)p_Py_FinalizeEx,
@@ -2458,6 +2527,8 @@ int main(void) {
         return 3;
     }
     cy_log("[stub] Python initialized\n");
+    /* **命令行参数 -> sys.argv** ✅ —— 必须在**任何用户代码之前** ✅ */
+    cratix_set_argv();
     /* sys.dllhandle ✅：解释器用「自己的 DLL 句柄」定位标准库目录 ✅
      * （A 形态 ✅：解释器在内存里 ✅ → 系统里没有 python314.dll ✅
      *   → GetModuleHandleEx(FROM_ADDRESS) 找不到 ✅ → sys.dllhandle 是无效句柄 ✅

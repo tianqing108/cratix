@@ -143,6 +143,20 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_membership(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_membership.py", "cratix_corpus_membership", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "has": [mod.has_category(v) for v in ("work", "zzz")],
+        "lacks": [mod.lacks_category(v) for v in ("work", "zzz")],
+        "branch": [mod.branch_on_membership(v) for v in ("work", "zzz")],
+        "number": [mod.has_number(v) for v in (2, 9)],
+        "substring": [mod.has_substring(v) for v in ("world", "nope")],
+        "chained": [mod.chained(v) for v in (2, 5)],
+    }
+
+
 def op_local_class(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_local_class.py", "cratix_corpus_local_class", out_dir)
     return {
@@ -538,6 +552,8 @@ def main() -> int:
             data = op_match(out_dir)
         elif op == "local_class":
             data = op_local_class(out_dir)
+        elif op == "membership":
+            data = op_membership(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

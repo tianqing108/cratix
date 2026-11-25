@@ -2703,7 +2703,10 @@ class FunctionGen:
                 r = self.new_int_helper()
                 self.emit("    " + r + " = PySequence_Contains(" + right + ", " + cur + ");")
                 self.emit("    if (" + r + " < 0) goto cratix_error;")
-                neg = "!" if op == "not in" else ""
+                # **极性** ✅：`failed` 表示"这条比较**不成立**" ✅ ->
+                # `in` 不成立 = **没找到**（r == 0）✅；`not in` 不成立 = **找到了**（r != 0）✅。
+                # 旧实现两个都反了 ✅（实测：`item in CATS` 恒为 False ✅）✅
+                neg = "" if op == "not in" else "!"
                 self.emit("    if (" + neg + r + ") " + failed + " = 1;")
             else:
                 code = CMP_CODES.get(op)

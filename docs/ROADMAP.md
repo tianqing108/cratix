@@ -732,6 +732,20 @@ f-string ✅ / 生成器表达式 ✅ / JSON ✅ / 文件 ✅ / 子命令 ✅ / 
    快路径只留给**纯位置**调用 ✅（那才是热路径 ✅）。
 
 **实测** ✅：`kw_only` / `kw_zero` / `kw_one` / `kw_two` 四种形态全对 ✅；全量标准库仍是 **0 崩溃** ✅、AOT **36139** ✅（0.954 ✅）。
+
+**追加：#127 修掉了（argv ✅）+ 顺手抓到 `in` 极性 bug ✅**
+
+1. **`argv` -> `sys.argv`** ✅：stub 用 `GetCommandLineW` + `CommandLineToArgvW` ✅
+   切分命令行 ✅ -> `PyUnicode_FromWideChar` 建列表 ✅ -> 设 `sys.argv` ✅。
+   两条弯路记在 pitfalls #127 ✅：**改成 `wmain` 直接崩** ✅（入口点问题 ✅）；
+   **stub 里不能用 `Py_ssize_t`** ✅（它不包含 Python.h ✅）。
+   **实测** ✅：日志出现 `argv: 4 项 ✅` ✅，`notes ... stats` 能按参数工作 ✅。
+2. **`x in Y` 恒为 `False`** ✅（piṭfalls #130 ✅）——`examples/notes` 的
+   `if category not in CATEGORIES` 立刻炸出来 ✅。链式比较里 `failed` 的含义是
+   "这一条**不成立**" ✅，而 `in` 的极性写反了 ✅。已修 ✅ + 新增语料 `corpus_membership` ✅。
+
+**待修** ⬜：#131 ✅（打包后的 exe 里 `add` 写文件时崩 ✅ —— 进程内同样代码正常 ✅，
+说明与 **stub / VFS 写路径**有关 ✅）。
 剩下 73 个回退：**生成器 52**（`yield`/`yield from` ✅）、nonlocal 5 ✅、嵌套定义 3 ✅、类关键字 3 ✅。
 **生成器是唯一的大块** ✅ —— 它们回退后与源码等速 ✅，所以只是覆盖率数字 ✅，不是性能问题 ✅。
 

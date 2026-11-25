@@ -378,6 +378,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["from_globals"], 20)
         self.assertEqual(data["capturing"], 3)
 
+    def test_27_membership(self):
+        """**`in` / `not in`** ✅ —— 极性以前写反了（`x in Y` 恒为 False ✅）。"""
+        data = run_worker("membership")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["has"], [True, False])
+        self.assertEqual(data["lacks"], [False, True])
+        self.assertEqual(data["branch"], ["ok", "missing"])
+        self.assertEqual(data["number"], [True, False])
+        self.assertEqual(data["substring"], [True, False])
+        self.assertEqual(data["chained"], [True, False])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
