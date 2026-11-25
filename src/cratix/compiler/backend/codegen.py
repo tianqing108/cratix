@@ -455,34 +455,81 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # --- ��� ✅：每类一个方法表 ✅（方法名带类名前缀 ✅ —— 避免同名冲突 ✅）---
     classes = classes or []
     for cls in classes:
-        # **tp_new** ✅：分配实例 ✅ 并调用 __init__ ✅（把 self 放第一个 ✅）
+        descriptors = set(cls.get("descriptor_methods") or ())
+        # **`__init__` 有原生实现 -> 走 `tp_init`** ✅：`type_call` 会**直接**调 ✅，
+        # 省掉"查 __init__ 属性 + 造绑定方法"✅（造实例密集时差别很大 ✅）。
+        has_native_init = "__init__" in descriptors
+        if has_native_init:
+            out.append("static int cratix_init_" + c_ident(cls["name"]) + "(PyObject *self, PyObject *args, PyObject *kwargs) {")
+            out.append("    PyObject *res = cratix_fn_" + c_ident(cls["name"] + ".__init__") + "(self, args, kwargs);")
+            out.append("    if (res == NULL) return -1;")
+            out.append("    Py_DECREF(res);")
+            out.append("    return 0;")
+            out.append("}")
+            out.append("")
+        # **tp_new** ✅：分配实例 ✅（初始化交给 tp_init ✅；没有原生 __init__ 时才自己调 ✅）
         out.append("static PyObject *cratix_new_" + c_ident(cls["name"]) + "(PyTypeObject *type, PyObject *args, PyObject *kwargs) {")
         out.append("    PyObject *self = type->tp_alloc(type, 0);")
-        out.append("    PyObject *init; PyObject *callargs; PyObject *res; Py_ssize_t n, i;")
+        out.append("    PyObject *init; PyObject *res;")
         out.append("    if (self == NULL) return NULL;")
-        out.append("    init = PyObject_GetAttrString((PyObject *)type, \"__init__\");")
-        out.append("    if (init == NULL) { Py_DECREF(self); return NULL; }")
-        out.append("    n = PyTuple_GET_SIZE(args);")
-        out.append("    callargs = PyTuple_New(n + 1);")
-        out.append("    if (callargs == NULL) { Py_DECREF(init); Py_DECREF(self); return NULL; }")
-        out.append("    Py_INCREF(self); PyTuple_SET_ITEM(callargs, 0, self);")
-        out.append("    for (i = 0; i < n; i++) { PyObject *v = PyTuple_GET_ITEM(args, i); Py_INCREF(v); PyTuple_SET_ITEM(callargs, i + 1, v); }")
-        out.append("    res = PyObject_Call(init, callargs, kwargs);")
-        out.append("    Py_DECREF(callargs); Py_DECREF(init);")
-        out.append("    if (res == NULL) { Py_DECREF(self); return NULL; }")
-        out.append("    Py_DECREF(res);")
-        out.append("    return self;")
+        if has_native_init:
+            out.append("    (void)init; (void)res; (void)args; (void)kwargs;")
+            out.append("    return self;")
+        else:
+            out.append("    init = PyObject_GetAttrString(self, \"__init__\");")
+            out.append("    if (init == NULL) { Py_DECREF(self); return NULL; }")
+            out.append("    res = PyObject_Call(init, args, kwargs);")
+            out.append("    Py_DECREF(init);")
+            out.append("    if (res == NULL) { Py_DECREF(self); return NULL; }")
+            out.append("    Py_DECREF(res);")
+            out.append("    return self;")
+        out.append("}")
+        out.append("")
+        # **实例结构体 = 属性槽位** ✅（M5 ✅）—— 属性存在 C 结构里 ✅，
+        # 编译产物读 `self.x` 时可以**按偏移直接取** ✅（不必过属性协议 ✅）。
+        # 仍然保留 MANAGED_DICT ✅ -> 没声明过的属性照旧可以挂在实例字典上 ✅。
+        slots = list(cls.get("slots") or ())
+        struct_name = "cratix_inst_" + c_ident(cls["name"])
+        out.append("static PyMemberDef cratix_cls_" + c_ident(cls["name"]) + "_members[] = {")
+        for index, slot_name in enumerate(slots):
+            # **Py_T_OBJECT_EX** ✅：3.12+ 的公开名字 ✅（`structmember.h` 里的 T_OBJECT_EX 已废弃 ✅）
+            out.append("    {" + q + slot_name + q + ", Py_T_OBJECT_EX, offsetof(" + struct_name + ", s" + str(index) + "), 0, NULL},")
+        out.append("    {NULL, 0, 0, 0, NULL}")
+        out.append("};")
+        out.append("")
+        # **GC 回调** ✅ —— HAVE_GC 要求 traverse ✅；
+        # 托管字典也要 visit/clear ✅（否则字典里的循环引用回收不到 ✅）。
+        out.append("static int cratix_traverse_" + c_ident(cls["name"]) + "(PyObject *self, visitproc visit, void *arg) {")
+        out.append("    Py_VISIT(Py_TYPE(self));")
+        out.append("    PyObject_VisitManagedDict(self, visit, arg);")
+        for index, _slot in enumerate(slots):
+            out.append("    Py_VISIT(((" + struct_name + " *)self)->s" + str(index) + ");")
+        out.append("    return 0;")
+        out.append("}")
+        out.append("")
+        out.append("static int cratix_clear_" + c_ident(cls["name"]) + "(PyObject *self) {")
+        out.append("    PyObject_ClearManagedDict(self);")
+        for index, _slot in enumerate(slots):
+            out.append("    Py_CLEAR(((" + struct_name + " *)self)->s" + str(index) + ");")
+        out.append("    return 0;")
         out.append("}")
         out.append("")
         out.append("static PyType_Slot cratix_cls_" + c_ident(cls["name"]) + "_slots[] = {")
         out.append("    {Py_tp_new, (void *)cratix_new_" + c_ident(cls["name"]) + "},")
+        out.append("    {Py_tp_members, (void *)cratix_cls_" + c_ident(cls["name"]) + "_members},")
+        if has_native_init:
+            out.append("    {Py_tp_init, (void *)cratix_init_" + c_ident(cls["name"]) + "},")
+        out.append("    {Py_tp_traverse, (void *)cratix_traverse_" + c_ident(cls["name"]) + "},")
+        out.append("    {Py_tp_clear, (void *)cratix_clear_" + c_ident(cls["name"]) + "},")
         out.append("    {0, NULL}")
         out.append("};")
         out.append("")
         out.append("static PyType_Spec cratix_cls_" + c_ident(cls["name"]) + "_spec = {")
         out.append("    " + q + module_name + "." + cls["name"] + q + ",")
-        out.append("    sizeof(PyObject), 0,")
-        out.append("    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_MANAGED_DICT,")
+        out.append("    sizeof(" + struct_name + "), 0,")
+        # **MANAGED_DICT 必须配 HAVE_GC** ✅ —— 托管字典的指针存在对象**前置头**里 ✅，
+        # 没有 GC 标志就不会预留那块空间 ✅ -> 成员偏移与托管字典**重叠** ✅ -> 堆损坏 ✅（实测 ✅）。
+        out.append("    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MANAGED_DICT,")
         out.append("    cratix_cls_" + c_ident(cls["name"]) + "_slots")
         out.append("};")
         out.append("")
@@ -617,20 +664,24 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            if (t == NULL) { Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(t);")
             out.append("        }")
-        # **建类** ✅ —— 用 `type(name, (object,), ns)` ✅（比 PyType_FromSpec 稳 ✅ ✅）
-        # 命名空间里有 **__module__** ✅ 与**跳板** ✅（普通 Python 函数 ✅ → 调用时绑定 self ✅ ✅）。
-        out.append("        PyObject *ns = PyDict_New();")
-        out.append("        if (ns == NULL) { Py_DECREF(m); return NULL; }")
-        out.append("        PyObject *mod_name = PyUnicode_FromString(" + q + module_name + q + ");")
-        out.append("        if (mod_name == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-        out.append("        PyDict_SetItemString(ns, \"__module__\", mod_name);")
-        out.append("        Py_DECREF(mod_name);")
+        # **建类** ✅ —— `PyType_FromSpec` ✅（要有**实例结构体**才能做属性槽位 ✅）。
+        # 类属性/文档/跳板在**建类之后**用 SetAttr 挂 ✅。
+        out.append("        PyObject *cls = (PyObject *)PyType_FromSpec(&cratix_cls_" + c_ident(cls["name"]) + "_spec);")
+        out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        cratix_type_" + c_ident(cls["name"]) + " = cls;")
+        out.append("        Py_INCREF(cratix_type_" + c_ident(cls["name"]) + ");")
+        out.append("        {")
+        out.append("            PyObject *mod_name = PyUnicode_FromString(" + q + module_name + q + ");")
+        out.append("            if (mod_name == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+        out.append("            if (PyObject_SetAttrString(cls, \"__module__\", mod_name) < 0) { Py_DECREF(mod_name); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+        out.append("            Py_DECREF(mod_name);")
+        out.append("        }")
         # **类文档保真** ✅
         if cls.get("doc"):
             out.append("        {")
             out.append("            PyObject *cd = PyUnicode_FromString(" + c_string(cls["doc"]) + ");")
-            out.append("            if (cd == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-            out.append("            if (PyDict_SetItemString(ns, \"__doc__\", cd) < 0) { Py_DECREF(cd); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            if (cd == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyObject_SetAttrString(cls, \"__doc__\", cd) < 0) { Py_DECREF(cd); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(cd);")
             out.append("        }")
         # **跳板进命名空间** ✅（普通 Python 函数 ✅ → 作为方法时自动绑定 self ✅ ✅）
@@ -641,10 +692,10 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             decorators = (cls.get("method_decorators") or {}).get(method_name) or []
             out.append("        {")
             out.append("            PyObject *tbv = PyDict_GetItemString(cratix_globals, " + q + tb + q + ");")
-            out.append("            if (tbv == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            if (tbv == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             out.append("            Py_INCREF(tbv);")
             out.append("            PyObject *mn = PyUnicode_FromString(" + q + method_name + q + ");")
-            out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             # **先设 __name__ 再套装饰器** ✅ —— property 等描述符没有可写的 __name__ ✅
             out.append("            if (PyObject_SetAttrString(tbv, \"__name__\", mn) < 0) { PyErr_Clear(); }")
             out.append("            Py_DECREF(mn);")
@@ -666,34 +717,25 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             for segment in reversed(decorators):
                 out.append("            {")
                 out.append("                PyObject *dec = PyRun_String(" + c_string(segment) + ", Py_eval_input, cratix_globals, cratix_globals);")
-                out.append("                if (dec == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+                out.append("                if (dec == NULL) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
                 out.append("                PyObject *nv = PyObject_CallOneArg(dec, tbv);")
                 out.append("                Py_DECREF(dec);")
-                out.append("                if (nv == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+                out.append("                if (nv == NULL) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
                 out.append("                Py_DECREF(tbv);")
                 out.append("                tbv = nv;")
                 out.append("            }")
-            out.append("            if (PyDict_SetItemString(ns, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(tbv);")
             out.append("        }")
         # **类属性** ✅
         for attr_name, attr_ir in cls.get("attrs", []):
             out.append("        {")
             out.append("            PyObject *av = " + const_expr(attr_ir.get("value")) + ";")
-            out.append("            if (av == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-            out.append("            PyDict_SetItemString(ns, " + q + attr_name + q + ", av);")
+            out.append("            if (av == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + attr_name + q + ", av) < 0) { Py_DECREF(av); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(av);")
             out.append("        }")
-        # **建类** ✅
-        out.append("        PyObject *bases = PyTuple_Pack(1, (PyObject *)&PyBaseObject_Type);")
-        out.append("        if (bases == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-        out.append("        PyObject *cname = PyUnicode_FromString(" + q + cls["name"] + q + ");")
-        out.append("        if (cname == NULL) { Py_DECREF(bases); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-        out.append("        PyObject *cls = PyObject_CallFunctionObjArgs((PyObject *)&PyType_Type, cname, bases, ns, NULL);")
-        out.append("        Py_DECREF(cname);")
-        out.append("        Py_DECREF(bases);")
-        out.append("        Py_DECREF(ns);")
-        out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+
         # **原生方法描述符** ✅ —— 建类后挂上去 ✅（PyDescr_NewMethod 需要类对象 ✅）。
         # 好处 ✅：调用时 `self` 由**描述符**绑定 ✅ -> 省掉 Python 跳板帧 ✅。
         desc_index = 0
@@ -730,6 +772,24 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("}")
     # **常量池的静态声明** ✅ —— 放在 include 之后 ✅（必须在文件作用域 ✅）
     emit_pool_statics(out, consts)
+    # **实例结构体也必须在函数体之前** ✅ —— 属性快路径要按偏移解引用 ✅
+    declarations = []
+    for cls in (classes or []):
+        class_slots = list(cls.get("slots") or ())
+        class_struct = "cratix_inst_" + c_ident(cls["name"])
+        declarations.append("typedef struct {")
+        declarations.append("    PyObject_HEAD")
+        for index, _slot in enumerate(class_slots):
+            declarations.append("    PyObject *s" + str(index) + ";")
+        declarations.append("} " + class_struct + ";")
+        declarations.append("static PyObject *cratix_type_" + c_ident(cls["name"]) + " = NULL;")
+        declarations.append("")
+    if declarations:
+        index = 0
+        for i, line in enumerate(out):
+            if line.startswith("#include"):
+                index = i + 1
+        out[index:index] = [""] + declarations
     return nl.join(out) + nl
 
 def generate_module(module_name: str, init_symbol: str, functions: list, key_names: list,
@@ -831,7 +891,8 @@ class FunctionGen:
     """生成一个函数的 C 代码 ✅。"""
 
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
-                 class_methods=None, self_attr_writes=None, method_mode=False):
+                 class_methods=None, self_attr_writes=None, method_mode=False,
+                 known_classes=None, enclosing_class=None):
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
         self.method_mode = bool(method_mode)
@@ -862,6 +923,12 @@ class FunctionGen:
         self.finally_all: list = []
         # **生成器表达式的辅助函数** ✅（名字 -> 源码 ✅ —— 模块 init 里建出来 ✅）
         self.genexp_sources: dict = {}
+        # **类信息** ✅：名字 -> {属性名: 槽位下标} ✅（属性快路径用 ✅）
+        self.known_classes: dict = dict(known_classes or {})
+        # 本方法所属的类 ✅（`self` 的静态类型 ✅）
+        self.enclosing_class = enclosing_class
+        # **局部变量的静态类型** ✅（只做乐观推断 ✅ —— 运行时还有 type check 兜底 ✅）
+        self.local_types: dict = {}
         # **推导式作用域栈** ✅ —— 每层推导式一个 {名字: C 临时变量} ✅
         # （Python 3 的推导式有**独立作用域** ✅ -> 目标名不能污染函数局部 ✅）
         self.comp_scopes: list = []
@@ -1020,6 +1087,48 @@ class FunctionGen:
         t = self.emit_expr(node)
         self.emit(dest + " = " + t + ";")
         self.emit(t + " = NULL;")
+
+    def track_local_type(self, node) -> None:
+        """**乐观**记录 `name = SomeClass(...)` ✅（生成代码里仍有 type check 兜底 ✅）。"""
+        if len(node.get("targets", [])) != 1:
+            return
+        target = node.get("targets")[0]
+        if target is None or target.kind != "name":
+            return
+        name = target.get("id")
+        value = node.kids[0] if node.kids else None
+        class_name = None
+        if value is not None and value.kind == "call" and value.kids:
+            func = value.kids[0]
+            if func.kind == "name" and func.get("id") in self.known_classes:
+                class_name = func.get("id")
+        if class_name is None:
+            self.local_types.pop(name, None)
+        else:
+            self.local_types[name] = class_name
+
+    def receiver_type(self, node):
+        """静态推断接收者的类名 ✅（乐观 ✅ —— 生成代码里还有 type check 兜底 ✅）。"""
+        if node is None or node.kind != "name":
+            return None
+        name = node.get("id")
+        if name == "self":
+            return self.enclosing_class
+        return self.local_types.get(name)
+
+    def slot_fast_path(self, receiver, attr):
+        """槽位快路径的三元组 ✅（结构体名 ✅ / 字段名 ✅ / 类名 ✅）；不适用返回 None ✅。"""
+        class_name = self.receiver_type(receiver)
+        if not class_name:
+            return None
+        slots = self.known_classes.get(class_name)
+        if not slots or attr not in slots:
+            return None
+        return (
+            "cratix_inst_" + c_ident(class_name),
+            "s" + str(slots[attr]),
+            class_name,
+        )
 
     def attr_ref(self, node) -> str:
         """属性名的**缓存引用** ✅ —— interned 字符串 ✅（避免每次新建 ✅ ✅）。"""
@@ -1270,9 +1379,24 @@ class FunctionGen:
         if kind == "attr":
             obj = self.emit_expr(target.kids[0])
             self.emit_attr_name(target)
-            self.emit("if (PyObject_SetAttr(" + obj + ", " + self.attr_ref(target) + ", " + value_var + ") < 0) goto cratix_error;")
-            self.emit("Py_DECREF(" + value_var + ");")
-            self.emit(value_var + " = NULL;")
+            fast = self.slot_fast_path(target.kids[0], target.get("attr"))
+            if fast is None:
+                self.emit("if (PyObject_SetAttr(" + obj + ", " + self.attr_ref(target) + ", " + value_var + ") < 0) goto cratix_error;")
+                self.emit("Py_DECREF(" + value_var + ");")
+                self.emit(value_var + " = NULL;")
+                return
+            struct_name, field, class_name = fast
+            # **槽位写入快路径** ✅（类型对得上就按偏移直接写 ✅；否则退回通用路径 ✅）
+            self.emit("if (Py_TYPE(" + obj + ") == (PyTypeObject *)cratix_type_" + c_ident(class_name) + ") {")
+            self.emit("    PyObject *cratix_old = ((" + struct_name + " *)" + obj + ")->" + field + ";")
+            self.emit("    ((" + struct_name + " *)" + obj + ")->" + field + " = " + value_var + ";")
+            self.emit("    " + value_var + " = NULL;")
+            self.emit("    Py_XDECREF(cratix_old);")
+            self.emit("} else {")
+            self.emit("    if (PyObject_SetAttr(" + obj + ", " + self.attr_ref(target) + ", " + value_var + ") < 0) goto cratix_error;")
+            self.emit("    Py_DECREF(" + value_var + ");")
+            self.emit("    " + value_var + " = NULL;")
+            self.emit("}")
             return
         if kind == "subscript":
             obj = self.emit_expr(target.kids[0])
@@ -1479,6 +1603,7 @@ class FunctionGen:
             return
         if kind == "assign":
             value = self.emit_expr(node.kids[0])
+            self.track_local_type(node)
             for target in node.get("targets", []):
                 self.emit_assign(target, value)
             return
@@ -1750,8 +1875,25 @@ class FunctionGen:
         if kind == "attr":
             obj = self.emit_expr(node.kids[0])
             self.emit_attr_name(node)
-            self.emit(t + " = PyObject_GetAttr(" + obj + ", " + self.attr_ref(node) + ");")
-            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            fast = self.slot_fast_path(node.kids[0], node.get("attr"))
+            if fast is None:
+                self.emit(t + " = PyObject_GetAttr(" + obj + ", " + self.attr_ref(node) + ");")
+                self.emit("if (" + t + " == NULL) goto cratix_error;")
+                return t
+            struct_name, field, class_name = fast
+            # **槽位快路径** ✅：类型对得上就按偏移直接读 ✅（省掉属性协议 ✅）；
+            # 对不上就退回通用查找 ✅ —— 所以这个快路径**永远安全** ✅。
+            self.emit("if (Py_TYPE(" + obj + ") == (PyTypeObject *)cratix_type_" + c_ident(class_name) + ") {")
+            self.emit("    " + t + " = ((" + struct_name + " *)" + obj + ")->" + field + ";")
+            self.emit("    if (" + t + " == NULL) {")
+            self.emit("        PyErr_Format(PyExc_AttributeError, \"cratix: unset slot '%s'\", " + c_string(node.get("attr")) + ");")
+            self.emit("        goto cratix_error;")
+            self.emit("    }")
+            self.emit("    Py_INCREF(" + t + ");")
+            self.emit("} else {")
+            self.emit("    " + t + " = PyObject_GetAttr(" + obj + ", " + self.attr_ref(node) + ");")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("}")
             return t
         if kind == "subscript":
             obj = self.emit_expr(node.kids[0])

@@ -272,6 +272,32 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     # **与黄金模型共用同一实现** ✅ —— 否则两边判定会漂移 ✅ ✅
     module_globals = module_bindings(tree)
 
+    # --- 类槽位预扫 ✅（函数生成时就要知道"哪些类有哪些槽位"）---
+    class_slots_map: dict = {}
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.ClassDef):
+            continue
+        writes = set()
+        for entry in stmt.body:
+            if not isinstance(entry, ast.FunctionDef):
+                continue
+            for child in ast.walk(entry):
+                if isinstance(child, ast.Assign):
+                    targets = list(child.targets)
+                elif isinstance(child, (ast.AugAssign, ast.AnnAssign)):
+                    targets = [child.target]
+                else:
+                    continue
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
+                        writes.add(target.attr)
+        names = sorted(n for n in writes if n.isidentifier() and n not in ("self", "__class__"))
+        class_slots_map[stmt.name] = {name: index for index, name in enumerate(names)}
+
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
     # **常量池** ✅ —— 整模块一个 ✅（常量只建一次 ✅，循环里只 INCREF ✅）
@@ -292,7 +318,10 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 raise Unsupported("模块级装饰器（函数级回退）")
             check_function(stmt, scope)
             built = builder.build_stmt(stmt)
-            gen = codegen.FunctionGen(stmt.name, built.get("params"), built.get("body", []), scope, consts)
+            gen = codegen.FunctionGen(
+                stmt.name, built.get("params"), built.get("body", []), scope, consts,
+                known_classes=class_slots_map,
+            )
             gen.emit_binding()
             for body_stmt in built.get("body", []):
                 gen.emit_stmt(body_stmt)
@@ -365,6 +394,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             "name": stmt.name,
             "doc": _doc_of(stmt),
             "descriptor_methods": [],
+            # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）
+            "slots": sorted(class_slots_map.get(stmt.name, {})),
             "methods": [],
             "attrs": [],
             # **类装饰器** ✅（建类之后按**逆序**应用 ✅ —— 与 CPython 一致 ✅）
@@ -396,6 +427,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         class_methods=generated_methods,
                         self_attr_writes=self_attr_writes,
                         method_mode=item.name in set(descriptor_methods),
+                        known_classes=class_slots_map,
+                        enclosing_class=stmt.name,
                     )
                     gen.emit_binding()
                     for body_stmt in built.get("body", []):
@@ -453,6 +486,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     if module_gen is not None:
         key_names.extend(sorted(module_gen.global_names))
         result.genexp_sources.update(module_gen.genexp_sources)
+    # **类信息总表** ✅（属性槽位快路径用 ✅）—— 必须在生成函数**之后**汇总 ✅，
+    # 因为那时才知道每个类最终有哪些槽位 ✅；生成函数时先用**声明好的**表 ✅。
     result.key_names = key_names
     result.module_gen = module_gen
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）

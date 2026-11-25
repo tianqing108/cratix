@@ -142,6 +142,15 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：实例结构体 / 属性槽位 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 67 | 换成槽位后**堆被写坏** ✅（某个 dict 键尾巴变成 NUL ✅；PYTHONMALLOC=debug 报 "tail pad bytes not FORBIDDENBYTE" ✅） | MANAGED_DICT **必须配 HAVE_GC** ✅ —— 托管字典指针存在对象**前置头** ✅，没有 GC 标志就不预留那块空间 ✅ -> 成员偏移与托管字典**重叠** ✅ | 同时置 Py_TPFLAGS_HAVE_GC ✅ |
+| 68 | 加了 HAVE_GC 后报 "has the Py_TPFLAGS_HAVE_GC flag but has no traverse function" ✅ | FromSpec 不会替你补 GC 槽位 ✅ | 生成 tp_traverse / tp_clear ✅（含 Py_VISIT(Py_TYPE(self)) ✅ 与 PyObject_VisitManagedDict / PyObject_ClearManagedDict ✅） |
+| 69 | 结构体与类型对象**声明在函数体之后** ✅ -> C2065 ✅ | 生成顺序是"函数 -> 类" ✅ | 把 struct / 类型对象声明**插到 include 之后、函数体之前** ✅ |
+| 70 | 造实例变慢 ✅（chained 0.37× ✅） | tp_new 里每次都 PyObject_GetAttrString(self, "__init__") ✅（查属性 + 造绑定方法 ✅） | 用 **Py_tp_init** 槽位 ✅（type_call 直接调 ✅）-> chained 0.84× ✅ |
+
 ## 追加：try/finally ✅
 
 | # | 现象 | 根因 | 修法 |
