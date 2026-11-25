@@ -91,6 +91,18 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["pure_with"], 11)
         self.assertEqual(data["pure_nested"], 3)
 
+    def test_06_decorators_and_property(self):
+        data = run_worker("decorators")
+        # 装饰器函数本身回退 ✅（体内有嵌套 def ✅）；被装饰的函数也回退 ✅（PyCFunction 没有 __dict__ ✅）
+        self.assertEqual(data["fallback"], ["composed", "double", "tag", "twice"])
+        # 类方法全部 AOT 化 ✅（含 @property / @staticmethod / @classmethod / 自定义装饰器 ✅）
+        for name in ("doubled", "label", "helper", "build", "scaled", "plain"):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        # 与源码逐字一致 ✅
+        self.assertEqual(data["module_level"], "(6, 'tag(6)')")
+        self.assertEqual(data["box_ops"], "(10, 'box:5', 2, 7, 10, 5)")
+        self.assertEqual(data["marked_ops"], "(True, 1)")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

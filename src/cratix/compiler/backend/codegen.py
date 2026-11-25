@@ -358,7 +358,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("} cratix_fb_entry;")
         out.append("")
         out.append("static const cratix_fb_entry cratix_fallbacks[] = {")
-        for name in sorted(fallback_code):
+        # **按源码顺序安装** ✅ —— 装饰器在使用前必须已定义 ✅（按名字排会 NameError ✅）
+        for name in sorted(fallback_code, key=lambda n: (fallback_code[n].get("order", 0), n)):
             item = fallback_code[name]
             out.append(
                 "    {" + q + name + q + ", "
@@ -382,6 +383,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **不设 m_def** ✅ —— `PyModule_SetModuleDef` 在 3.14 **没有导出** ✅（实测 ✅）；
     # 我们也不需要 ✅ —— 引导模块对 exec_done 的记录**不会**调 exec_def ✅。
     out.append("    if (cratix_run_body(m) < 0) { Py_DECREF(m); return NULL; }")
+    # --- 函数级回退 ✅：内嵌源码 -> 在模块字典里 exec ✅ ---
+    # **必须排在类创建之前** ✅ —— 类装饰器/方法装饰器是在建类时就要求值的 ✅，
+    # 装饰器本身可能正是回退函数 ✅（实测：顺序反了会 NameError ✅）。
+    if fallback_code:
+        out.append("    for (int i = 0; cratix_fallbacks[i].name != NULL; i++) {")
+        # **在模块字典里 exec** ✅ —— 函数的 __globals__ 就是模块字典 ✅
+        out.append("        PyObject *code = Py_CompileString(cratix_fallbacks[i].source, cratix_fallbacks[i].filename, Py_file_input);")
+        out.append("        if (code == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        PyObject *res = PyEval_EvalCode(code, cratix_globals, cratix_globals);")
+        out.append("        Py_DECREF(code);")
+        out.append("        if (res == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        Py_DECREF(res);")
+        out.append("    }")
     # --- 类 ✅：用堆类型创建 ✅（type(name, (object,), ns) ✅）---
     for cls in classes:
         table = "cratix_cls_" + c_ident(cls["name"]) + "_methods"
@@ -420,14 +434,27 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         # **跳板进命名空间** ✅（普通 Python 函数 ✅ → 作为方法时自动绑定 self ✅ ✅）
         for method_name, _gen in cls.get("methods", []):
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
+            decorators = (cls.get("method_decorators") or {}).get(method_name) or []
             out.append("        {")
             out.append("            PyObject *tbv = PyDict_GetItemString(cratix_globals, " + q + tb + q + ");")
             out.append("            if (tbv == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
             out.append("            Py_INCREF(tbv);")
             out.append("            PyObject *mn = PyUnicode_FromString(" + q + method_name + q + ");")
             out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
-            out.append("            PyObject_SetAttrString(tbv, \"__name__\", mn);")
+            # **先设 __name__ 再套装饰器** ✅ —— property 等描述符没有可写的 __name__ ✅
+            out.append("            if (PyObject_SetAttrString(tbv, \"__name__\", mn) < 0) { PyErr_Clear(); }")
             out.append("            Py_DECREF(mn);")
+            # **装饰器** ✅：按**逆序**应用 ✅（@a @b def f -> a(b(f)) ✅），与 CPython 一致 ✅
+            for segment in reversed(decorators):
+                out.append("            {")
+                out.append("                PyObject *dec = PyRun_String(" + c_string(segment) + ", Py_eval_input, cratix_globals, cratix_globals);")
+                out.append("                if (dec == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+                out.append("                PyObject *nv = PyObject_CallOneArg(dec, tbv);")
+                out.append("                Py_DECREF(dec);")
+                out.append("                if (nv == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+                out.append("                Py_DECREF(tbv);")
+                out.append("                tbv = nv;")
+                out.append("            }")
             out.append("            if (PyDict_SetItemString(ns, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(tbv);")
             out.append("        }")
@@ -449,20 +476,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        Py_DECREF(bases);")
         out.append("        Py_DECREF(ns);")
         out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+        # **类装饰器** ✅：建类之后按逆序应用 ✅（@a @b class C -> a(b(C)) ✅）
+        for segment in reversed(cls.get("decorators") or []):
+            out.append("        {")
+            out.append("            PyObject *dec = PyRun_String(" + c_string(segment) + ", Py_eval_input, cratix_globals, cratix_globals);")
+            out.append("            if (dec == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            PyObject *nv = PyObject_CallOneArg(dec, cls);")
+            out.append("            Py_DECREF(dec);")
+            out.append("            if (nv == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(cls);")
+            out.append("            cls = nv;")
+            out.append("        }")
         out.append("        if (PyDict_SetItemString(cratix_globals, " + q + cls["name"] + q + ", cls) < 0) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
         out.append("        Py_DECREF(cls);")
-        out.append("    }")
-    # --- 函数级回退 ✅：从内嵌字节码重建函数 ✅（globals = 模块字典 ✅）---
-    if fallback_code:
-        out.append("    for (int i = 0; cratix_fallbacks[i].name != NULL; i++) {")
-        # **在模块字典里 exec** ✅ —— 这样函数的 __globals__ 就是模块字典 ✅
-        # （模块级名字才能被函数体看到 ✅）；函数会自然落到模块字典里 ✅。
-        out.append("        PyObject *code = Py_CompileString(cratix_fallbacks[i].source, cratix_fallbacks[i].filename, Py_file_input);")
-        out.append("        if (code == NULL) { Py_DECREF(m); return NULL; }")
-        out.append("        PyObject *res = PyEval_EvalCode(code, cratix_globals, cratix_globals);")
-        out.append("        Py_DECREF(code);")
-        out.append("        if (res == NULL) { Py_DECREF(m); return NULL; }")
-        out.append("        Py_DECREF(res);")
         out.append("    }")
     out.append("    return m;")
     out.append("}")

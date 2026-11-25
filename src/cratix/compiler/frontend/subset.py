@@ -46,8 +46,7 @@ def check_class(node: ast.ClassDef) -> None:
         raise Unsupported("继承非 object 基类（" + type(base).__name__ + "）")
     if node.keywords:
         raise Unsupported("类定义带关键字参数（metaclass 等）")
-    if node.decorator_list:
-        raise Unsupported("带装饰器的类")
+    # **类装饰器** ✅：建类之后在运行期按逆序应用 ✅（见 backend/codegen.py ✅）
     for stmt in node.body:
         if isinstance(stmt, ast.FunctionDef):
             continue

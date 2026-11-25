@@ -7,7 +7,7 @@
 | M0 骨架 + vendor | 仓库结构、vendor 打包半边并去业务化、统一改名、CLI deps/build | 示例工程产出 onefile exe 并运行成功；两次构建 sha256 一致；构建链无第三方编译器 | 1 周 | ✅ 完成 |
 | M1 运行期 + 双形态 | 纯 Python 引导模块(.pyc 兜底)、stub 改造 D1–D8、onedir 目录版 | onefile 零落盘；onedir 可用；verify --no-console 通过 | 1.5 周 | ✅ 完成 |
 | M2 AOT 内核 | IR / 作用域 / 子集判定 / 黄金模型 / C 后端 / MSVC 驱动 / 接入打包链 / 双进程探针 / 函数级回退 | 编译产物与源码行为等价；产物里能加载 AOT 模块 | 4 周 | ✅ 完成 |
-| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类 ✅ + try/except ✅ + with ✅ + 循环 else ✅ 完成**；推导式/装饰器待做 |
+| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类 ✅ + try/except ✅ + with ✅ + 循环 else ✅ + 装饰器 ✅ + property ✅ 完成**；推导式待补齐 |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | ✅ 完成（AOT 增量 ✅ 热构建 3.3s ✅；report.json ✅；可复现 ✅）|
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | 🟡 **基准已建立** ✅（实测 0.69× ✅ 诚实记录 ✅）；提速待做 ✅ |
 | M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | ⬜ 未开始 |
@@ -131,9 +131,29 @@
 （进入/退出顺序 ✅、抑制 ✅、传播 ✅、return/break/continue ✅、with×try 组合 ✅、循环 else ✅）；
 **38 项测试全绿** ✅（新增 2 项 with 用例 ✅）；两次 AOT 构建 sha256 一致 ✅（`e2c06f81…` ✅）。
 
+## M3 追加：装饰器 + property ✅
+
+- **类方法装饰器** ✅：`@property` / `@staticmethod` / `@classmethod` / 自定义装饰器 ✅ ——
+  原生方法照常 AOT ✅，**跳板函数**（真 Python 函数 ✅）在建类时按**逆序**套上装饰器 ✅
+  （`@a @b def f` → `a(b(f))` ✅），再放进类命名空间 ✅；
+- **类装饰器** ✅：建类之后按**逆序**应用 ✅（`@a @b class C` → `a(b(C))` ✅）；
+- **模块级装饰函数** ✅：走**函数级回退** ✅ —— 原生函数的导出物是 `PyCFunction` ✅（没有 `__dict__` ✅），
+  `functools.wraps` 之类在它上面会失败 ✅；回退路径在模块字典里 exec 源码 ✅ → 装饰器**原样生效** ✅；
+- **回退安装顺序** ✅：按**源码顺序**安装 ✅（原来按名字排 ✅ → `@tag` 早于 `def tag` ✅ → NameError ✅），
+  且**排在类创建之前** ✅（类/方法装饰器在建类时就要求值 ✅）；
+- **类方法回退** ✅：源码片段要 **dedent** ✅（类体里有缩进 ✅ → 直接 exec 会 IndentationError ✅）。
+
+**实测** ✅：`tests/corpus/corpus_decorators.py` ✅ 与源码**逐字一致** ✅ ——
+`module_level → (6, 'tag(6)')` ✅、`box_ops → (10, 'box:5', 2, 7, 10, 5)` ✅（property/staticmethod/classmethod/自定义 ✅）、
+`marked_ops → (True, 1)` ✅（类装饰器 ✅）；**39 项测试全绿** ✅；两次 AOT 构建 sha256 一致 ✅（`e2c06f81…` ✅）。
+
+**黄金模型的诚实边界** ✅：IR 的 `funcdef` 节点**不建模装饰器** ✅ →
+`diff.classify` 对带装饰器的函数直接判"不可比" ✅（否则会拿"没装饰器的语义"去比"有装饰器的源码" ✅ → 假绿 ✅）；
+装饰器的正确性由 **AOT 子进程测试**覆盖 ✅。
+
 ## 下一步
 
-1. **M3 继续** ✅：推导式补齐 ✅ / 装饰器 ✅ / property ✅ / 元数据保真 ✅；
+1. **M3 继续** ✅：推导式补齐 ✅ / 元数据保真 ✅；
 2. **提速** ✅：属性槽位化 ✅（mypyc 风格 ✅ —— 收益最大 ✅ ✅）；
 3. **定位原生引导的崩溃** ✅（与 AOT finder 在 memdl 解释器下的交互 ✅）。
 

@@ -113,6 +113,17 @@ def op_with(out_dir: Path) -> dict:
     }
 
 
+def op_decorators(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_decorators.py", "cratix_corpus_dec", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "module_level": repr(mod.module_level()),
+        "box_ops": repr(mod.box_ops()),
+        "marked_ops": repr(mod.marked_ops()),
+    }
+
+
 def op_fallback(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_unsupported.py", "cratix_corpus_unsup", out_dir)
     return {
@@ -145,6 +156,8 @@ def main() -> int:
             data = op_try(out_dir)
         elif op == "with":
             data = op_with(out_dir)
+        elif op == "decorators":
+            data = op_decorators(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

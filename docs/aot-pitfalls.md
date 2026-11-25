@@ -132,6 +132,20 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 - **return / break / continue** ✅：先走**退栈段**（`cratix_unwind`）✅ 把 with 的 `__exit__(None, None, None)` 跑完 ✅；
 - 多管理器 `with A as a, B as b` ✅：按**嵌套**生成（A 在外 ✅）→ 退出顺序 B → A ✅（与 CPython 实测一致 ✅）。
 
+## 追加：装饰器 + property ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 33 | 装饰器**完全没生效** ✅（静默偏差 ✅） | 模块级函数编译成 `PyCFunction` ✅ —— 它**没有 `__dict__`** ✅ → `functools.wraps` 之类会失败 ✅；且 IR 的 `funcdef` 不建模装饰器 ✅ | 模块级装饰函数**走函数级回退** ✅（exec 源码 ✅ 装饰器原样生效 ✅） |
+| 34 | 模块导入时 `NameError: name 'tag' is not defined` ✅ | 回退函数表按**名字排序**安装 ✅ → `composed`（用到 `@tag` ✅）排在 `tag` 之前 ✅ | 按**源码顺序**（`lineno` ✅）安装 ✅ |
+| 35 | `IndentationError: unexpected indent` / `SyntaxError` ✅ | 装饰器片段用**行切片**取出 ✅ → 带上 `@` 与缩进 ✅；`Py_eval_input` 只收**一个表达式** ✅ | 用 `ast.get_source_segment` 取**表达式本体** ✅ + `dedent` ✅ |
+| 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
+| 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
+
+**类方法的装饰器怎么做** ✅：原生方法照常 AOT ✅ → 生成**跳板函数**（真 Python 函数 ✅）→
+在建类时按**逆序**调用装饰器 ✅（`PyRun_String(expr, Py_eval_input)` 求值 + `PyObject_CallOneArg` 应用 ✅）→
+结果放进类命名空间 ✅。于是 `property` / `staticmethod` / `classmethod` / 自定义装饰器**全部走同一机制** ✅。
+
 **黄金模型同步** ✅：`irvm._exec_with` 改成 CPython 的**抑制语义** ✅ ——
 某层抑制后 ✅ 外层按**正常退出**收 `__exit__(None, None, None)` ✅（原来会把异常继续传给外层 ✅ ✅）。
 **作用域判定统一** ✅：`module_bindings()` 抽到 `frontend/scope.py` ✅ ——

@@ -45,6 +45,11 @@ def classify(tree: ast.Module, name: str) -> tuple[bool, str]:
     """判定函数能否 AOT ✅ —— 返回 (supported, reason ✅)。"""
     try:
         node = find_function(tree, name)
+        # **装饰器不进黄金模型** ✅ —— IR 的 funcdef 节点只有 name/params/flags/body ✅，
+        # 不带装饰器 ✅；硬比会拿"没装饰器的语义"去对"有装饰器的源码" ✅ -> 假绿 ✅。
+        # 装饰器的正确性由 AOT 子进程测试覆盖 ✅（tests/test_fallback.py ✅）。
+        if node.decorator_list:
+            return False, "装饰器（IR 模型不建模）"
         # **必须传模块绑定** ✅ —— 否则模块级的类/常量会被当成闭包 ✅ ✅
         check_function(node, analyze_function(node, module_bindings(tree)))
         return True, ""

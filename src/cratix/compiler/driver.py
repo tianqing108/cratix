@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -119,6 +120,46 @@ def init_symbol_for(module_name: str) -> str:
     return "PyInit_cratix_" + digest
 
 
+def _source_segment(source: str, node, dedent: bool = False) -> str | None:
+    """取一段源码 ✅（**带装饰器的函数要从装饰器那行开始** ✅）。
+
+    为什么不用 `ast.get_source_segment` 直接了事 ✅：
+    - FunctionDef 的 lineno 指向 `def` 那行 ✅ -> 装饰器会被漏掉 ✅
+      -> 回退后函数**没有装饰器** ✅ -> 静默语义偏差 ✅；
+    - 类方法在类体里**有缩进** ✅ -> 直接 exec 会 IndentationError ✅ -> 需要 dedent ✅。
+    """
+    if not source:
+        return None
+    lines = source.splitlines()
+    decorators = getattr(node, "decorator_list", None) or []
+    if decorators:
+        start = min(d.lineno for d in decorators)
+    else:
+        start = node.lineno
+    end = getattr(node, "end_lineno", None) or start
+    text = chr(10).join(lines[start - 1:end])
+    # **一律 dedent** ✅ —— 类方法/装饰器都有缩进 ✅；顶层代码 dedent 不改内容 ✅
+    return textwrap.dedent(text).strip()
+
+
+def _decorator_segment(source: str, node) -> str | None:
+    """取**装饰器表达式本身** ✅（不含前导 `@` ✅ —— 运行期要的是表达式 ✅）。
+
+    `Py_eval_input` 只接受**一个表达式** ✅ ——
+    行切片会带上 `@` 与缩进 ✅ → IndentationError / SyntaxError ✅（实测 ✅）。
+    """
+    try:
+        segment = ast.get_source_segment(source, node)
+    except Exception:  # noqa: BLE001
+        segment = None
+    if not segment:
+        segment = _source_segment(source, node)
+        stripped = segment.lstrip()
+        if stripped.startswith("@"):
+            segment = stripped[1:]
+    return textwrap.dedent(segment).strip()
+
+
 def _module_level_supported(stmt) -> bool:
     if isinstance(stmt, ast.Assign):
         return all(isinstance(t, ast.Name) for t in stmt.targets)
@@ -129,10 +170,8 @@ def _module_level_supported(stmt) -> bool:
         return True
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return True
-    if isinstance(stmt, ast.ClassDef):
-        # **v1 不支持类** ✅ —— 静默跳过会丢掉模块的公开面 ✅
-        # → 整个模块回退 .pyc ✅（M3 起支持 ✅）
-        return False
+    # **类不进模块语句表** ✅ —— 调用方已经先跳过 ✅；
+    # 类由 codegen 在建模块时单独生成 ✅（见 compile_module 的类段 ✅）。
     return False
 
 
@@ -171,6 +210,11 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
             continue
         scope = analyze_function(stmt, module_globals)
         try:
+            # **模块级装饰器走函数级回退** ✅ ——
+            # 原生函数是 PyCFunction ✅（没有 __dict__ ✅）✅ -> functools.wraps 之类会在它上面失败 ✅；
+            # 回退路径在模块字典里 exec 源码 ✅ -> 装饰器**原样生效** ✅（无静默语义偏差 ✅）。
+            if stmt.decorator_list:
+                raise Unsupported("模块级装饰器（函数级回退）")
             check_function(stmt, scope)
             built = builder.build_stmt(stmt)
             gen = codegen.FunctionGen(stmt.name, built.get("params"), built.get("body", []), scope)
@@ -183,15 +227,13 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
             # → 运行期由 PyEval_EvalCode 执行 ✅（真 frame ✅ 真 traceback ✅ 语义等同源码 ✅）。
             # **内嵌函数源码** ✅（运行期 Py_CompileString 编译 ✅）——
             # 比内嵌 code object 简单 ✅（避开 marshal 的 C API ✅）且可读 ✅。
-            segment = None
-            try:
-                segment = ast.get_source_segment(source, stmt)
-            except Exception:  # noqa: BLE001
-                segment = None
+            segment = _source_segment(source, stmt)
             if segment:
                 result.fallback_code[stmt.name] = {
                     "source": segment,
                     "filename": str(path),
+                    # **源码顺序** ✅ —— 装饰器引用必须在定义之后执行 ✅（按名字排会 NameError ✅）
+                    "order": stmt.lineno,
                 }
             continue
         result.functions.append(gen)
@@ -209,9 +251,21 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
             result.module_ok = False
             result.module_reason = exc.reason
             return result
-        class_info = {"name": stmt.name, "methods": [], "attrs": []}
+        class_info = {
+            "name": stmt.name,
+            "methods": [],
+            "attrs": [],
+            # **类装饰器** ✅（建类之后按**逆序**应用 ✅ —— 与 CPython 一致 ✅）
+            "decorators": [seg for seg in (_decorator_segment(source, d) for d in stmt.decorator_list) if seg],
+            # **方法装饰器** ✅（同样按逆序应用 ✅）
+            "method_decorators": {},
+        }
         for item in stmt.body:
             if isinstance(item, ast.FunctionDef):
+                if item.decorator_list:
+                    segments = [seg for seg in (_decorator_segment(source, d) for d in item.decorator_list) if seg]
+                    if segments:
+                        class_info["method_decorators"][item.name] = segments
                 method_scope = analyze_function(item, module_globals)
                 try:
                     check_function(item, method_scope)
@@ -232,15 +286,13 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
                         gen.emit_stmt(body_stmt)
                 except Unsupported as exc:
                     result.plans.append(FunctionPlan(item.name, False, exc.reason))
-                    segment = None
-                    try:
-                        segment = ast.get_source_segment(source, item)
-                    except Exception:  # noqa: BLE001
-                        segment = None
+                    # **类方法在类体里有缩进** ✅ -> 回退必须 dedent ✅ ✅
+                    segment = _source_segment(source, item, dedent=True)
                     if segment:
                         result.fallback_code[item.name] = {
                             "source": segment,
                             "filename": str(path),
+                            "order": item.lineno,
                         }
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
