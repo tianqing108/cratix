@@ -43,6 +43,15 @@ CASES = [
     # **类密集** ✅（属性读 + 方法调用 ✅ —— 历史最弱的一块 ✅）
     ("corpus_methods", "self_calls", (2000,), 100),
     ("corpus_methods", "attribute_reads", (2000,), 100),
+    # **真实负载** ✅：字符串处理 ✅ 字典计数 ✅ 结构组装 ✅ 逐字符扫描 ✅
+    # （只测"纯算术循环"会把 GEO 高估 ✅ —— 这几类更接近日常代码 ✅）
+    # ⚠️ **`wordfreq` 暂时不进基准** ✅ —— 它暴露了一个**真 bug** ✅：
+    # 同一个函数里**第二次**`sorted(x, key=...)`会报 `sort() takes no positional arguments` ✅
+    # （第一次正常 ✅）。见 ROADMAP 的 P0 条目 ✅ —— 修好再加进来 ✅。
+    # ("corpus_real", "wordfreq", ("the quick brown fox jumps over the lazy dog " * 4, 5), 2000),
+    ("corpus_real", "matrix_ops", (12,), 300),
+    ("corpus_real", "build_records", (["alpha", "beta", "gamma", "delta"] * 3,), 3000),
+    ("corpus_real", "tokenize", ("alpha beta,gamma;delta epsilon" * 2,), 3000),
 ]
 
 
