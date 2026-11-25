@@ -685,6 +685,25 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     lambda_captures: dict = {}
     # **没法编译的 lambda** ✅（外层函数用到它时必须回退 ✅ 不能静默 ✅）
     lambda_blocked: set = set()
+    # **模块级的 lambda** ✅ —— 以前只扫函数/方法体 ✅ ->
+    # `X = lambda v: ...` 这种模块级语句会 "lambda（未登记）" ✅ -> **整个模块**回退 ✅（实测 21 个 ✅）
+    for stmt in module_stmts:
+        for child in ast.walk(stmt):
+            if not isinstance(child, ast.Lambda):
+                continue
+            key = (getattr(child, "lineno", 0), getattr(child, "col_offset", 0))
+            if key in lambda_names:
+                continue
+            try:
+                built = builder.build_lambda(child)
+            except Unsupported as exc:
+                result.plans.append(FunctionPlan("_cratix_lambda_mod", False, exc.reason))
+                continue
+            name = "_cratix_lambda_" + str(len(lambda_names))
+            lambda_names[key] = name
+            lambda_captures[key] = []
+            lambda_gens.append((name, built, []))
+
     for stmt in tree.body:
         if not isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
             continue
