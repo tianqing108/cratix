@@ -685,6 +685,23 @@ cratix_t1 = Py_NewRef(cratix_t0);   /* 自己又拿了一份 ✅ */
 **实测** ✅：工厂方案**不再崩** ✅（`del module` + `gc.collect()` 干净退出 ✅）；
 AOT 函数 **35428 → 36139** ✅（**0.954** ✅）、崩溃 **0** ✅。
 
+## 追加：`cratix explain` —— 把"AOT 覆盖率"变成可查的工具 ✅
+
+**动机** ✅：`--strict-aot` 只告诉你"有回退" ✅ —— 不告诉你**哪个函数** ✅、**为什么** ✅。
+于是在 CLI 里加了一个开发者工具 ✅：
+
+```bash
+cratix explain                 # 每个模块：AOT 几个 / 回退几个 + 每个回退的原因
+cratix explain --only fallback # 只看回退（不打原因汇总）
+cratix explain --module app    # 只看名字里含 app 的模块
+```
+
+**实测** ✅：`examples/notes` -> `AOT 16 / 回退 0 = 1.000` ✅；`examples/hello` -> `1 / 0` ✅；
+有生成器的模块会明确写出 `generatorish: 生成器` ✅。
+
+**测试** ✅：`tests/test_cli_explain.py`（2 项 ✅ —— 能列出回退 ✅、`--only fallback` 不打汇总 ✅）；
+总计 **93 项全绿** ✅。
+
 ## 追加：M5 第一步 —— `range` 循环快路径 ✅
 
 **做法** ✅：`for i in range(...)` 不再走**迭代器协议** ✅ ——

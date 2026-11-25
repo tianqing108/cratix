@@ -77,6 +77,76 @@ def _cmd_deps(args) -> int:
     return EXIT_OK
 
 
+def _cmd_explain(args) -> int:
+    """**解释 AOT 覆盖率** ✅ —— 每个函数为什么能/不能 AOT ✅（开发者工具 ✅）。
+
+    用法 ✅：`cratix explain [--config ...] [--module 名字] [--only fallback]`
+    """
+    from .compiler import driver
+    from .packaging import deps
+
+    config_path = Path(args.config).resolve() if args.config else find_config()
+    cfg = load_config(config_path, {"entry": args.entry or None})
+    rel = cfg.entry_module.replace(".", "/")
+    entry_file = None
+    for candidate in (cfg.project_root / (rel + ".py"), cfg.project_root / rel / "__init__.py"):
+        if candidate.is_file():
+            entry_file = candidate
+            break
+    if entry_file is None:
+        print(f"[cratix] 找不到入口模块源码：{cfg.entry_module}", file=sys.stderr)
+        return EXIT_USAGE
+    closure = deps.collect(cfg.project_root, entry_file)
+
+    totals = {"ok": 0, "fallback": 0}
+    reasons: dict = {}
+    shown = 0
+    for module_name in sorted(closure.modules):
+        if args.module and args.module not in module_name:
+            continue
+        source = closure.path_of(module_name) if hasattr(closure, "path_of") else None
+        if source is None:
+            for candidate in (
+                cfg.project_root / (module_name.replace(".", "/") + ".py"),
+                cfg.project_root / module_name.replace(".", "/") / "__init__.py",
+            ):
+                if candidate.is_file():
+                    source = candidate
+                    break
+        if source is None:
+            continue
+        mc = driver.compile_module(Path(source), module_name)
+        if not mc.module_ok:
+            print(f"{module_name}  ✗ 模块级回退：{mc.module_reason}")
+            totals["fallback"] += 1
+            reasons[mc.module_reason] = reasons.get(mc.module_reason, 0) + 1
+            continue
+        bad = [plan for plan in mc.plans if not plan.supported]
+        if not bad:
+            print(f"{module_name}  ✅ {len(mc.supported_names)} 个函数全部 AOT")
+            totals["ok"] += len(mc.supported_names)
+            continue
+        print(f"{module_name}  ✅ {len(mc.supported_names)} AOT / ⬜ {len(bad)} 回退")
+        totals["ok"] += len(mc.supported_names)
+        totals["fallback"] += len(bad)
+        for plan in bad:
+            reasons[plan.reason] = reasons.get(plan.reason, 0) + 1
+            if args.only != "fallback" or shown < args.limit:
+                if shown < args.limit:
+                    print(f"    ⬜ {plan.name}: {plan.reason}")
+                    shown += 1
+    print()
+    total = totals["ok"] + totals["fallback"]
+    ratio = (totals["ok"] / total) if total else 0.0
+    print(f"合计：AOT {totals['ok']} / 回退 {totals['fallback']} = {ratio:.3f}")
+    if reasons and args.only != "fallback":
+        print()
+        print("== 回退原因 top 10 ==")
+        for reason, count in sorted(reasons.items(), key=lambda item: -item[1])[:10]:
+            print(f"{count:5d}  {reason}")
+    return EXIT_OK
+
+
 def _pick_exe(cfg, explicit: str):
     if explicit:
         path = Path(explicit).resolve()
@@ -218,6 +288,14 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("--name", default="", help="产品名（默认取目录名）")
     p_init.add_argument("--package", default="", help="包名（默认 app）")
     p_init.set_defaults(func=_cmd_init)
+
+    p_explain = sub.add_parser("explain", help="解释 AOT 覆盖率（哪个函数为什么回退）")
+    p_explain.add_argument("--config", default="")
+    p_explain.add_argument("--entry", default="")
+    p_explain.add_argument("--module", default="", help="只看名字里含这个子串的模块")
+    p_explain.add_argument("--only", choices=["fallback"], help="只列回退函数")
+    p_explain.add_argument("--limit", type=int, default=200, help="最多列多少个函数")
+    p_explain.set_defaults(func=_cmd_explain)
 
     p_info = sub.add_parser("info", help="显示生效的配置")
     p_info.add_argument("--config", default="")

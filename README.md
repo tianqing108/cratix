@@ -84,6 +84,7 @@ cratix build   [--config cratix.toml] [--target onefile|onedir] [--entry mod:att
                 [--console|--no-console] [--icon path] [--backend pyc|aot] [--probe on|off|strict]
                [--console|--no-console] [--icon path] [--backend pyc|aot] [--probe on|off|strict]
 cratix deps    [--config cratix.toml] [--entry mod:attr]
+cratix explain [--config cratix.toml] [--module 子串] [--only fallback]   # 哪个函数为什么没 AOT
 cratix verify  [--config cratix.toml] [--exe path] [--zero-disk] [--no-console]
 cratix init    <目录> [--name 名称] [--package 包名]      # 生成项目脚手架 ✅
 cratix info    [--config cratix.toml]                    # 显示生效配置 ✅
