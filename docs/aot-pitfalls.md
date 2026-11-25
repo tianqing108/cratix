@@ -223,6 +223,22 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#166 **字典直连**：下标读写 + `d.get(k, default)`
+
+CPython 对字典有 `BINARY_SUBSCR_DICT` ✅ `STORE_SUBSCR_DICT` ✅ 和 `CALL_METHOD` 特化 ✅；
+我们以前一律走 `PyObject_GetItem`/`PyObject_CallMethod` ✅（多一层类型分派 + 方法绑定 ✅）。
+
+**做法** ✅（一律**先判 `PyDict_CheckExact`** ✅，不是精确字典就退回通用路径 ✅）：
+
+- `d[k]` ✅ -> `PyDict_GetItemWithError` ✅（**取到的是借用引用** ✅ -> 立刻 `Py_INCREF` ✅；
+  未命中要**自己补 `KeyError`** ✅；键不可哈希时它已经把 `TypeError` 设好了 ✅ -> 不能吞 ✅）；
+- `d[k] = v` ✅ -> `PyDict_SetItem` ✅；
+- `d.get(k, default)` ✅ -> 直接查表 ✅（命中取真值 ✅ 未命中取 default ✅）。
+
+**实测** ✅：`wordfreq` **0.99× -> 1.13×** ✅、GEO(全部) **1.30 -> 1.33** ✅。
+
+**语义细节** ✅：子类**不**走快路径 ✅（`PyDict_CheckExact` 排除子类 ✅ —— 子类可能覆盖 `get`/\`__getitem__` ✅）。
+
 ## 追加：#165 **`s = s + t` 原地追加**（`tokenize` 0.91× -> 1.14× ✅）
 
 CPython 有一个我们没做的特化 ✅：`BINARY_OP_INPLACE_ADD_UNICODE` ✅ ——

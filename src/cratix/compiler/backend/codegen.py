@@ -2119,7 +2119,12 @@ class FunctionGen:
         if kind == "subscript":
             obj = self.emit_expr(target.kids[0])
             key = self.emit_expr(target.kids[1])
-            self.emit("if (PyObject_SetItem(" + obj + ", " + key + ", " + value_var + ") < 0) goto cratix_error;")
+            # **字典直连存** ✅（对应 `STORE_SUBSCR_DICT` ✅）
+            self.emit("if (PyDict_CheckExact(" + obj + ")) {")
+            self.emit("    if (PyDict_SetItem(" + obj + ", " + key + ", " + value_var + ") < 0) goto cratix_error;")
+            self.emit("} else {")
+            self.emit("    if (PyObject_SetItem(" + obj + ", " + key + ", " + value_var + ") < 0) goto cratix_error;")
+            self.emit("}")
             self.emit("Py_DECREF(" + value_var + ");")
             self.emit(value_var + " = NULL;")
             return
@@ -3023,7 +3028,19 @@ class FunctionGen:
         if kind == "subscript":
             obj = self.emit_expr(node.kids[0])
             key = self.emit_expr(node.kids[1])
-            self.emit(t + " = PyObject_GetItem(" + obj + ", " + key + ");")
+            # **字典直连** ✅（对应 CPython 的 `BINARY_SUBSCR_DICT` ✅）——
+            # `PyObject_GetItem` 要先走类型分派 ✅；精确 dict 时直接 `PyDict_GetItemWithError` 更快 ✅。
+            self.emit("if (PyDict_CheckExact(" + obj + ")) {")
+            self.emit("    " + t + " = PyDict_GetItemWithError(" + obj + ", " + key + ");")
+            self.emit("    if (" + t + " == NULL) {")
+            self.emit("        if (!PyErr_Occurred()) { PyErr_SetObject(PyExc_KeyError, " + key + "); }")
+            self.emit("        goto cratix_error;")
+            self.emit("    }")
+            # **从字典取到的是借用引用** ✅ -> 必须 INCREF ✅（临时变量会被 DECREF ✅）
+            self.emit("    Py_INCREF(" + t + ");")
+            self.emit("} else {")
+            self.emit("    " + t + " = PyObject_GetItem(" + obj + ", " + key + ");")
+            self.emit("}")
             self.emit("if (" + t + " == NULL) goto cratix_error;")
             return t
         if kind == "binop":
@@ -3280,6 +3297,27 @@ class FunctionGen:
             self.emit("    Py_DECREF(cratix_am);")
             self.emit("    if (" + t + " == NULL) goto cratix_error;")
             self.emit("}")
+            return True
+        if attr == "get" and len(positional) == 2:
+            # **`d.get(k, default)`** ✅ —— 精确 dict 时直接查表 ✅（省掉属性查找 + 绑定方法 ✅）。
+            # 语义要点 ✅：**命中返回真值 ✅、未命中返回 default ✅、键不可哈希要抛 TypeError** ✅
+            # （`PyDict_GetItemWithError` 会把异常设好 ✅ -> 不能吞 ✅）。
+            self.emit_attr_name(target)
+            obj = self.emit_expr(receiver)
+            key = self.emit_expr(positional[0])
+            dflt = self.emit_expr(positional[1])
+            self.emit("if (PyDict_CheckExact(" + obj + ")) {")
+            self.emit("    PyObject *cratix_gv = PyDict_GetItemWithError(" + obj + ", " + key + ");")
+            self.emit("    if (cratix_gv != NULL) { " + t + " = Py_NewRef(cratix_gv); }")
+            self.emit("    else if (PyErr_Occurred()) { goto cratix_error; }")
+            self.emit("    else { " + t + " = Py_NewRef(" + dflt + "); }")
+            self.emit("} else {")
+            self.emit("    PyObject *cratix_gm = PyObject_GetAttr(" + obj + ", " + self.attr_ref(target) + ");")
+            self.emit("    if (cratix_gm == NULL) goto cratix_error;")
+            self.emit("    " + t + " = PyObject_CallFunctionObjArgs(cratix_gm, " + key + ", " + dflt + ", NULL);")
+            self.emit("    Py_DECREF(cratix_gm);")
+            self.emit("}")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
             return True
         if attr == "split" and len(positional) == 1:
             # `s.split(sep)` ✅ -> `PyUnicode_Split` ✅（省掉属性查找 + 绑定方法 ✅）
