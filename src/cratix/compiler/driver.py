@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -61,6 +62,8 @@ class ModuleCompile:
     source_path: str = ""
     # **类级回退** ✅（[(顺序, 源码)] ✅）
     fallback_classes: list = field(default_factory=list)
+    # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
+    inline_class_sources: dict = field(default_factory=dict)
     # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
     body_marks: list = field(default_factory=list)
     # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
@@ -259,7 +262,8 @@ def _module_level_supported(stmt) -> bool:
         return True
     # **`from ... import ...`** ✅ —— 以前这一条不认 ✅ -> 整个模块回退 ✅（真实代码几乎都中招 ✅）
     if isinstance(stmt, ast.ImportFrom):
-        return all(alias.name != "*" for alias in stmt.names)
+        # **`from m import *`** ✅ 已支持 ✅（模块级 ✅）
+        return True
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return True
     # **类不进模块语句表** ✅ —— 调用方已经先跳过 ✅；
@@ -317,6 +321,17 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             continue  # 文档字符串 ✅ —— 无需编译 ✅
         module_stmts.append(stmt)
 
+    # **模块体控制流里的类** ✅ —— `if cond: class C: ...` 这种 ✅
+    # （顶层类走"按源码位置创建" ✅；控制流里的类就地 exec 源码 ✅ —— 语义一致 ✅）
+    for stmt in module_stmts:
+        for sub in ast.walk(stmt):
+            if not isinstance(sub, ast.ClassDef):
+                continue
+            key = (getattr(sub, "lineno", 0), getattr(sub, "col_offset", 0))
+            segment = _source_segment(source, sub, dedent=True)
+            if segment:
+                result.inline_class_sources[key] = segment
+
     # --- 模块级绑定的名字 ✅（= 函数里的模块全局 ✅）---
     # **与黄金模型共用同一实现** ✅ —— 否则两边判定会漂移 ✅ ✅
     # **模块自带的 dunder** ✅（`__file__` 我们在 init 里补上 ✅）—— 不认它们的话 ✅
@@ -324,6 +339,25 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     module_globals = module_bindings(tree) | {
         "__file__", "__name__", "__doc__", "__package__", "__loader__", "__spec__",
     }
+    # **`from m import *`** ✅：那些名字在**编译期**就要知道 ✅（否则函数里用到会被当成闭包自由变量 ✅）。
+    # 直接把模块导进来取 `__all__` / `dir()` ✅ —— 运行期本来也要导入它 ✅。
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.ImportFrom):
+            continue
+        if not any(alias.name == "*" for alias in stmt.names):
+            continue
+        try:
+            base = module_name.rpartition(".")[0]
+            for _ in range(max(0, stmt.level - 1)):
+                base = base.rpartition(".")[0]
+            absolute = (base + "." + (stmt.module or "")) if stmt.module else base
+            if stmt.level == 0:
+                absolute = stmt.module or ""
+            imported = importlib.import_module(absolute)
+            exported = getattr(imported, "__all__", None)
+            module_globals |= set(exported if exported is not None else dir(imported))
+        except Exception:  # noqa: BLE001 - 导不进来就算了 ✅（运行期会自然报错 ✅）
+            continue
 
     # --- 类槽位预扫 ✅（函数生成时就要知道"哪些类有哪些槽位"）---
     class_slots_map: dict = {}
@@ -852,6 +886,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             package=module_name.rpartition(".")[0],
             lambda_names=lambda_names,
         )
+            # **模块体是在这里就地生成的** ✅ -> 控制流里的类要先能查到源码 ✅
+            module_gen.inline_class_sources = dict(result.inline_class_sources)
             for stmt in module_ir.get("body", []):
                 module_gen.emit_stmt(stmt)
                 # **每条语句结束时的行数** ✅ —— 类要按源码位置插进模块体 ✅
@@ -892,6 +928,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         fallback_classes=result.fallback_classes,
         class_order=result.class_order,
         body_marks=result.body_marks,
+        inline_class_sources=result.inline_class_sources,
     )
     result.consts = consts
     return result

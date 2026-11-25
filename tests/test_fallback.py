@@ -345,6 +345,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["broken_body"], 7)
         self.assertEqual(data["gen_inside"], 3)
 
+    def test_24_module_forms(self):
+        """**`from m import *`** ✅ 与 **模块体控制流里的类** ✅。"""
+        data = run_worker("module_forms")
+        self.assertTrue(data["module_ok"])
+        self.assertEqual(data["fallback"], [])
+        # star 导入的名字在**编译期**就认识了 ✅（不然 sqrt 会被当闭包 ✅）
+        self.assertEqual(data["root"], 5.0)
+        self.assertEqual(data["builtins"], 11.0)
+        # if 里的类按源码顺序就地创建 ✅
+        self.assertEqual(data["impl"], "fast")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

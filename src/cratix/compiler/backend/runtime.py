@@ -72,6 +72,41 @@ static PyObject *cratix_load_key(PyObject *globals, PyObject *builtins, PyObject
 }
 
 /* 真值语义 ✅（与 CPython 一致 ✅） */
+/* **`from m import *`** ✅ —— 按 CPython 的规则把名字搬进 globals ✅：
+   有 `__all__` 就用它 ✅；否则跳过下划线开头的名字 ✅。 */
+static int cratix_import_star(PyObject *module, PyObject *globals) {
+    PyObject *all = PyObject_GetAttrString(module, "__all__");
+    PyObject *source = NULL;
+    PyObject *names = NULL;
+    int result = -1;
+    if (all != NULL && PySequence_Check(all)) {
+        names = PySequence_List(all);
+        if (names == NULL) { Py_DECREF(all); return -1; }
+        Py_DECREF(all);
+    } else {
+        PyErr_Clear();
+        Py_XDECREF(all);
+        source = PyModule_GetDict(module);
+        if (source == NULL) return -1;
+        names = PyDict_Keys(source);
+        if (names == NULL) return -1;
+    }
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(names); i++) {
+        PyObject *key = PyList_GET_ITEM(names, i);
+        const char *text = PyUnicode_AsUTF8(key);
+        if (text == NULL) goto done;
+        if (source != NULL && text[0] == '_') continue;
+        PyObject *value = PyObject_GetAttr(module, key);
+        if (value == NULL) goto done;
+        if (PyDict_SetItem(globals, key, value) < 0) { Py_DECREF(value); goto done; }
+        Py_DECREF(value);
+    }
+    result = 0;
+done:
+    Py_XDECREF(names);
+    return result;
+}
+
 static int cratix_truth(PyObject *o) {
     int r = PyObject_IsTrue(o);
     if (r < 0) {

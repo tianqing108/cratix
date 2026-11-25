@@ -19,7 +19,7 @@ KIND_FIELDS = {
     # --- 模块 / 语句 ---
     "module": ("body",),
     "import": ("names",),                      # names: [(module, asname|None)]
-    "importfrom": ("module", "level", "names"),  # from module import names ✅（module 可为空 ✅）                     # names: [(module, asname|None)]
+    "importfrom": ("module", "level", "names", "star"),  # from module import * ✅（star ✅）                     # names: [(module, asname|None)]
     "import_from": ("module", "names", "level"),
     "assign": ("targets",),                  # kids: [value]
     "augassign": ("op", "target"),            # kids: [value]
@@ -40,7 +40,7 @@ KIND_FIELDS = {
     "handler": ("name", "type"),              # kids: [body...]
     "with": ("body",),                       # kids: [ctx, vars|None] 成对 ✅
     "funcdef": ("name", "params", "flags", "body", "key"),
-    "classdef": ("name", "bases", "body"),
+    "classdef": ("name", "bases", "body", "key"),
     # --- 参数 ---
     "params": ("names", "defaults", "kwdefaults", "kwonly", "vararg", "kwarg"),
     # --- 表达式 ---

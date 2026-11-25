@@ -151,11 +151,15 @@ def build_stmt(node: ast.stmt) -> ir.Node:
         # **`from ... import ...`** ✅ —— 真实代码里到处都是 ✅（不支持的话整个模块都得回退 ✅）。
         # 相对导入的**绝对名**由 codegen 按模块包名解析 ✅（builder 不知道包名 ✅）。
         names = []
+        star = False
         for alias in node.names:
             if alias.name == "*":
-                raise Unsupported("from ... import *（整函数回退）")
+                # **`from m import *`** ✅ —— 模块级支持 ✅（函数里 Python 本来也不允许 ✅）
+                star = True
+                continue
             names.append((alias.name, alias.asname))
-        return ir.node("importfrom", module=node.module or "", level=node.level, names=names)
+        return ir.node("importfrom", module=node.module or "", level=node.level,
+                       names=names, star=star)
     if isinstance(node, ast.FunctionDef):
         # **嵌套 def** ✅：在函数体里出现时，codegen 会按 (行, 列) 查登记表 ✅
         # （模块级/类方法由 driver 处理 ✅，不走这里 ✅）。
@@ -169,8 +173,10 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             body=[build_stmt(s) for s in node.body],
         )
     if isinstance(node, ast.ClassDef):
+        # **模块体控制流里的类** ✅（`if cond: class C: ...` ✅）-> codegen 按 (行, 列) 查源码 ✅
         return ir.node(
             "classdef",
+            key=(getattr(node, "lineno", 0), getattr(node, "col_offset", 0)),
             name=node.name,
             bases=[build_expr(b) for b in node.bases],
             body=[build_stmt(s) for s in node.body],

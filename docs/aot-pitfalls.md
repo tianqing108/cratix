@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：`import *` 与模块体控制流里的类 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 111 | `from math import *` 的模块整块回退 ✅，函数里 `sqrt` 被当成"闭包捕获" ✅ | star 导入的名字**不在** `module_bindings` 里 ✅ | 编译期**真导入**那个模块 ✅ 取 `__all__`/`dir()` 补进模块全局 ✅（运行期本来也要导入 ✅）；运行期用 `cratix_import_star` 搬名字 ✅ |
+| 112 | `if cond: class C: ...` 让模块回退 ✅ | 类创建只处理 `tree.body` 顶层 ✅ -> 控制流里的类走到 codegen 就是 `Unsupported` ✅ | 按 (行, 列) 登记源码 ✅ -> 模块体里**就地 exec** ✅（绑定行为与源码一致 ✅） |
+| 113 | 修完还是"取不到源码" ✅ | 模块体是在 **driver** 里就地生成的 ✅，而源码表在 `generate_module_single_phase` 里才挂到模块 gen 上 ✅ -> 太晚 ✅ | 在 **driver 生成模块体之前**挂上去 ✅ |
+
 ## 追加：编译期崩溃（异常逃出编译器）✅
 
 | # | 现象 | 根因 | 修法 |

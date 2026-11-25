@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_module_forms(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_module_forms.py", "cratix_corpus_module_forms", out_dir)
+    return {
+        "module_ok": mc.module_ok,
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "root": mod.root_and_floor(9.0),
+        "impl": mod.use_impl(),
+        "builtins": mod.builtin_from_star(),
+    }
+
+
 def op_robust(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_robust.py", "cratix_corpus_robust", out_dir)
     return {
@@ -496,6 +508,8 @@ def main() -> int:
             data = op_reraise(out_dir)
         elif op == "robust":
             data = op_robust(out_dir)
+        elif op == "module_forms":
+            data = op_module_forms(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

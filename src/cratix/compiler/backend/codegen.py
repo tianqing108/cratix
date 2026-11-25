@@ -444,7 +444,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  consts=None, func_meta=None, genexps=None,
                                  decorated_functions=None, source_file="",
                                  fallback_classes=None, class_order=None,
-                                 body_marks=None) -> str:
+                                 body_marks=None, inline_class_sources=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -453,6 +453,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     - 单阶段下 init 直接返回模块 ✅ → stub 的单阶段路径 ✅ → 模块体在 init 里已执行 ✅；
     - 代价：模块体**只能执行一次** ✅ → bootstrap **不要**再调 `exec_def` ✅。
     """
+    # **必须在生成模块体之前设好** ✅ —— 模块体在 `module_body_parts` 里就地生成 ✅
+    if module_gen is not None and inline_class_sources:
+        module_gen.inline_class_sources = dict(inline_class_sources)
     nl = chr(10)
     q = chr(34)
     out = []
@@ -1177,6 +1180,8 @@ class FunctionGen:
         self.genexp_sources: dict = {}
         # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
         self.needs_cur_exc = False
+        # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
+        self.inline_class_sources: dict = {}
         # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
         self.stmt_marks: list = []
         # **类信息** ✅：名字 -> {属性名: 槽位下标} ✅（属性快路径用 ✅）
@@ -2119,6 +2124,13 @@ class FunctionGen:
                 else:
                     raise Unsupported("del 目标：" + target.kind)
             return
+        if kind == "classdef":
+            # **模块体控制流里的类** ✅ —— 源码 exec 到模块字典 ✅（绑定行为与源码一致 ✅）
+            source_text = (self.inline_class_sources or {}).get(node.get("key"))
+            if not source_text:
+                raise Unsupported("类定义（模块体控制流里，取不到源码）")
+            self.emit("if (PyRun_String(" + c_string(source_text) + ", Py_file_input, cratix_globals, cratix_globals) == NULL) goto cratix_error;")
+            return
         if kind == "funcdef":
             # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）
             self.emit_inner_def(node)
@@ -2171,6 +2183,12 @@ class FunctionGen:
             mod = self.new_tmp()
             self.emit(mod + " = PyImport_Import(" + key + ");")
             self.emit("if (" + mod + " == NULL) goto cratix_error;")
+            if node.get("star"):
+                # **`from m import *`** ✅
+                self.emit("if (cratix_import_star(" + mod + ", cratix_globals) < 0) goto cratix_error;")
+                self.emit("Py_DECREF(" + mod + ");")
+                self.emit(mod + " = NULL;")
+                return
             for name, asname in node.get("names", []):
                 bind = asname or name
                 val = self.new_tmp()
