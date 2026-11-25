@@ -1188,7 +1188,7 @@ class FunctionGen:
         self.genexp_sources: dict = {}
         # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
         self.needs_cur_exc = False
-        # **本函数用到的内部属性名** ✅（ref -> 显示名 ✅；初始化提到入口 ✅）
+        # **本函数用到的内部属性名** ✅（ref -> 显示名 ✅；诊断/审计用 ✅）
         self.attr_used: dict = {}
         # **会被 `del` 的局部名** ✅ —— 读它们时要检查 NULL ✅（UnboundLocalError ✅）
         self.deleted_locals = set(deleted_locals or ())
@@ -1431,16 +1431,6 @@ class FunctionGen:
         self.emit("    if (" + ref + " == NULL) goto cratix_error;")
         self.emit("}")
         self.attr_used[ref] = target_attr(node)
-
-    def attr_init_lines(self) -> list:
-        """**函数入口**的属性名初始化 ✅（每个属性名一条 ✅ 幂等 ✅）。"""
-        lines = []
-        for ref in sorted(self.attr_used):
-            lines.append("    if (" + ref + " == NULL) {")
-            lines.append("        " + ref + " = PyUnicode_InternFromString(" + c_string(self.attr_used[ref]) + ");")
-            lines.append("        if (" + ref + " == NULL) goto cratix_error;")
-            lines.append("    }")
-        return lines
 
     def emit_cells_init(self) -> None:
         """**cell 字典** ✅ —— 被内层函数捕获的局部变量放这里 ✅（内层按名字读 ✅ 晚绑定 ✅）。"""
@@ -2568,7 +2558,12 @@ class FunctionGen:
             fn = BINOP_FUNCS.get(node.get("op"))
             if fn is None:
                 raise Unsupported("二元运算符：" + str(node.get("op")))
-            self.emit(t + " = " + fn + "(" + left + ", " + right + ");")
+            if node.get("op") == "**":
+                # **`PyNumber_Power` 是三元函数** ✅（第三个参数是取模用的 ✅ 传 `Py_None` ✅）。
+                # 以前只传两个 ✅ -> **C2198 编译失败** ✅（没有语料用过 `**` ✅ 一直没被发现 ✅）。
+                self.emit(t + " = " + fn + "(" + left + ", " + right + ", Py_None);")
+            else:
+                self.emit(t + " = " + fn + "(" + left + ", " + right + ");")
             self.emit("if (" + t + " == NULL) goto cratix_error;")
             return t
         if kind == "unaryop":

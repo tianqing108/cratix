@@ -398,6 +398,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["handlers"], ["1:pos", "2:neg/负数"])
         self.assertEqual(data["two_branches"], ["box7", "7"])
 
+    def test_29_operators_differential(self):
+        """**运算符差分测试** ✅ —— 拿**源码版**的结果当基准 ✅（不写死期望值 ✅）。
+
+        `in` / `not in` 曾经整个写反 ✅ 而没人发现 ✅ —— 因为语料里没人用过它 ✅。
+        """
+        data = run_worker("operators")
+        self.assertTrue(data["module_ok"])
+        self.assertEqual(data["fallback"], [], "运算符语料不该有回退")
+        self.assertEqual(data["mismatches"], [], "AOT 与源码版的运算符结果不一致")
+        self.assertGreater(data["compared"], 60, "差分用例太少")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

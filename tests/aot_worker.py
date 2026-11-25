@@ -143,6 +143,64 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_operators(out_dir: Path) -> dict:
+    """**运算符差分** ✅ —— 同一个语料分别用**源码**和 **AOT** 跑 ✅，逐个比 ✅。"""
+    import importlib.util
+
+    mc, mod = _compile("corpus_operators.py", "cratix_corpus_operators", out_dir)
+    corpus = Path(__file__).resolve().parent / "corpus" / "corpus_operators.py"
+    spec = importlib.util.spec_from_file_location("cratix_src_operators", corpus)
+    source = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(source)
+
+    # **参数要挑"所有被比函数都接受"的** ✅（`"ab" - "cd"` 会抛 ✅ -> 那就不是同一个结果可比了 ✅）
+    binaries = [(2, 3), (7, 2), (-5, 2), (0, 1), (9, 4)]
+    strings = [("ab", "cd")]
+    compares = [(1, 2), (2, 2), (3, 2), ("a", "b"), (0, 0)]
+    members = [("work", ("work", "life")), ("zzz", ("work", "life")),
+               (2, [1, 2, 3]), (9, [1, 2, 3]), ("ell", "hello"), ("zzz", "hello")]
+    pairs = {
+        "add": binaries + strings, "sub": binaries, "mul": binaries,
+        "bitand": [(6, 3), (5, 1)], "bitor": [(6, 3), (5, 1)], "bitxor": [(6, 3), (5, 1)],
+        "logical_and": [(1, 0), (0, 0), (2, 3)], "logical_or": [(0, 0), (0, 5), (1, 2)],
+        "truediv": [(7, 2), (9, 3)], "floordiv": [(7, 2), (-5, 2)], "mod": [(7, 2), (-5, 2)],
+        "power": [(2, 10), (3, 3)], "lshift": [(1, 4)], "rshift": [(16, 2)],
+        "identity": [(1, 1), (1, 2), ("a", "a")], "not_identity": [(1, 1), (1, 2)],
+        "contains": members, "not_contains": members,
+        "lt": compares, "le": compares, "eq": compares, "ne": compares,
+        "ge": compares, "gt": compares,
+    }
+    unaries = [("invert", (5,)), ("negate", (7,)), ("positive", (-3,)),
+               ("logical_not", (0,)), ("logical_not", (5,))]
+    triples = [("chained_range", (1, 2, 3)), ("chained_range", (1, 5, 3)),
+               ("chained_mixed", (1, 2, 3)), ("chained_contains", (1, 2, (2, 3))),
+               ("ternary", (True, "a", "b")), ("ternary", (False, "a", "b")),
+               ("walrus_in_condition", ([1, 2, 3],))]
+
+    mismatches = []
+    compared = 0
+    for name, args_list in pairs.items():
+        for args in args_list:
+            expected = getattr(source, name)(*args)
+            actual = getattr(mod, name)(*args)
+            compared += 1
+            if actual != expected:
+                mismatches.append(f"{name}{args}: aot={actual!r} src={expected!r}")
+    for name, args in unaries + triples:
+        expected = getattr(source, name)(*args)
+        actual = getattr(mod, name)(*args)
+        compared += 1
+        if actual != expected:
+            mismatches.append(f"{name}{args}: aot={actual!r} src={expected!r}")
+
+    return {
+        "module_ok": mc.module_ok,
+        "fallback": sorted(mc.fallback_names),
+        "compared": compared,
+        "mismatches": mismatches,
+    }
+
+
 def op_attr_branches(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_attr_branches.py", "cratix_corpus_attr_branches", out_dir)
     return {
@@ -567,6 +625,8 @@ def main() -> int:
             data = op_membership(out_dir)
         elif op == "attr_branches":
             data = op_attr_branches(out_dir)
+        elif op == "operators":
+            data = op_operators(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001
