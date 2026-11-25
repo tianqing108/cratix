@@ -52,9 +52,9 @@ class Store:
 
     def save(self):
         payload = [item.to_dict() for item in self.items]
-        text = json.dumps(payload, ensure_ascii=False)
-        with open(self.path, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        # **`Path.write_text`** ✅ —— #133（属性名静态量）修好之后 ✅ 这条路径不再崩 ✅
+        # （以前崩是因为 `encoding` 那个属性名的初始化只落在别的分支里 ✅）
+        self.path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     def add(self, text, category):
         if category not in CATEGORIES:
