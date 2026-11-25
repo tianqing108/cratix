@@ -139,6 +139,43 @@ def _cmd_verify(args) -> int:
     return EXIT_OK if ok else EXIT_RUNTIME_FAIL
 
 
+def _cmd_init(args) -> int:
+    """脚手架 ✅ —— 生成一个最小可用的 cratix 项目 ✅。"""
+    from .scaffold import scaffold
+
+    target = Path(args.directory).resolve()
+    created = scaffold(target, args.name, args.package)
+    print("[cratix] 已生成：" + str(target))
+    for path in created:
+        print("  " + str(path.relative_to(target)))
+    print("下一步：cd " + str(target) + "  然后 python -m cratix build")
+    return EXIT_OK
+
+
+def _cmd_info(args) -> int:
+    """显示**生效的**配置 ✅（合并后的 ✅ + 裁剪表 ✅）。"""
+    from .packaging import defaults
+
+    config_path = Path(args.config).resolve() if args.config else find_config()
+    if config_path is None:
+        print("[cratix] 附近没有 cratix.toml（用 --config 指定 ✅）")
+        return EXIT_USAGE
+    cfg = load_config(config_path)
+    print("配置文件：" + str(cfg.path))
+    print("项目根  ：" + str(cfg.project_root))
+    print("产品    ：" + cfg.name + " " + cfg.version)
+    print("入口    ：" + cfg.entry)
+    print("目标    ：" + ", ".join(cfg.targets))
+    print("后端    ：" + cfg.backend + "（探针 " + cfg.probe + "）")
+    print("控制台  ：" + ("保留" if cfg.console else "无"))
+    policy = defaults.apply_policy(cfg.policy)
+    print("裁剪模块：" + (", ".join(policy["exclude_modules"]) or "（无）"))
+    print("裁剪包  ：" + (", ".join(policy["exclude_packages"]) or "（无）"))
+    print("进包原生：" + ", ".join(policy["native_in_package"]))
+    print("项目顶层：" + (", ".join(policy["project_tops"]) or "（未声明 ✅）"))
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     _reconfigure_streams()
     parser = argparse.ArgumentParser(prog="cratix", description="自研 Python 打包工具")
@@ -167,6 +204,16 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.add_argument("--zero-disk", action="store_true", help="零落盘复检（独立 TEMP 目录 before/after）")
     p_verify.add_argument("--no-console", action="store_true", help="无标准句柄启动复检（= Explorer 双击）")
     p_verify.set_defaults(func=_cmd_verify)
+
+    p_init = sub.add_parser("init", help="生成项目脚手架")
+    p_init.add_argument("directory", help="目标目录")
+    p_init.add_argument("--name", default="", help="产品名（默认取目录名）")
+    p_init.add_argument("--package", default="", help="包名（默认 app）")
+    p_init.set_defaults(func=_cmd_init)
+
+    p_info = sub.add_parser("info", help="显示生效的配置")
+    p_info.add_argument("--config", default="")
+    p_info.set_defaults(func=_cmd_info)
 
     args = parser.parse_args(argv)
     try:

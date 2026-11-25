@@ -38,6 +38,10 @@ AOT **增量编译** ✅（指纹命中即跳过 cl+link ✅，热构建 3.3 s �
 $env:PYTHONPATH = "src"
 python -m cratix build --config examples/hello/cratix.toml
 
+# 从零开始 ✅
+python -m cratix init myapp --name myapp --package myapp
+cd myapp && python -m cratix build
+
 # 运行产物
 ./examples/hello/build/public/hello_0.1.0.exe
 
@@ -47,6 +51,9 @@ python -m cratix verify --config examples/hello/cratix.toml --no-console
 
 # 测试
 python -m unittest discover -s tests -p "test_*.py"
+
+# 性能基准 ✅
+python tests/bench/bench_aot.py --repeat 5
 ```
 
 ---
@@ -55,9 +62,12 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ```
 cratix build   [--config cratix.toml] [--target onefile|onedir] [--entry mod:attr]
+                [--console|--no-console] [--icon path] [--backend pyc|aot] [--probe on|off|strict]
                [--console|--no-console] [--icon path] [--backend pyc|aot] [--probe on|off|strict]
 cratix deps    [--config cratix.toml] [--entry mod:attr]
 cratix verify  [--config cratix.toml] [--exe path] [--zero-disk] [--no-console]
+cratix init    <目录> [--name 名称] [--package 包名]      # 生成项目脚手架 ✅
+cratix info    [--config cratix.toml]                    # 显示生效配置 ✅
 ```
 
 退出码：`0` 成功 · `1` 构建失败 · `2` 产物运行期校验失败 · `3` 用法错误。
