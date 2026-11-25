@@ -23,7 +23,7 @@
 | M3 子集扩展 | ✅ **完成**（含 `from … import` ✅ / `global` ✅ / 非局部复合赋值 ✅；自测语料 AOT 覆盖率 **92.9%**）（类 / try-except / **try-else · try-finally ✅** / with / 循环 else / 装饰器 / property / 推导式（含多生成器·解包·嵌套）/ 生成器表达式（真惰性）/ 元数据保真） |
 | M4 增量/可复现 | ✅ 完成（指纹增量 + report.json + 可复现） |
 | M5 性能 | 🟡 全部用例几何平均 1.13×（add 1.39×）；AOT 覆盖率报告 + strict-aot 严格模式 |
-| M6 跨平台 | 🟡 **四接口抽象 ✅ + Linux/macOS 占位 ✅**（Windows 全走接口 ✅，真实移植未做） |
+| M6 跨平台 | ✅ 四接口 ✅ + Windows 全走接口 ✅ + **Linux/macOS 编译路径已实现 ✅**（引导器待做 ⬜） |
 
 **当前可用能力**：`onefile` 单文件 exe 与 `onedir` 目录发行版构建 + 运行 + 零落盘 + 字节级可复现；
 `--backend aot` 用**自研编译器**把项目模块编成原生扩展并在运行期从内存加载 ✅；

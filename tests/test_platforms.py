@@ -76,14 +76,112 @@ class WindowsPlatformTest(unittest.TestCase):
         self.assertTrue(toolchain.identity)
 
 
+class LinuxPlatformTest(unittest.TestCase):
+    """Linux ✅ —— **编译路径已实现** ✅（打包引导器还没有 ✅）。"""
+
+    def setUp(self):
+        self.plat = platforms.platform_for("linux")
+
+    def test_suffixes(self):
+        self.assertEqual(self.plat.exe_suffix, "")
+        self.assertEqual(self.plat.extension_suffix, ".so")
+        self.assertIn(".so", self.plat.native_library_suffixes)
+
+    def test_system_libraries(self):
+        for name in ("libc.so.6", "libm.so.6", "libpthread.so.0", "ld-linux-x86-64.so.2"):
+            self.assertTrue(self.plat.is_system_library(name), name)
+        for name in ("libpython3.14.so.1.0", "libz.so.1", "libcustom.so"):
+            self.assertFalse(self.plat.is_system_library(name), name)
+
+    def test_library_alias_is_identity(self):
+        self.assertEqual(self.plat.resolve_library_alias("libz.so.1"), "libz.so.1")
+
+    def test_build_stub_is_explicitly_unsupported(self):
+        with self.assertRaises(PlatformUnsupported) as ctx:
+            self.plat.build_stub(Path("."))
+        self.assertIn("memfd", str(ctx.exception))
+
+    def test_build_extension_command(self):
+        """**不真编译** ✅ —— 只检查命令形状 ✅（Windows 上也能验证 ✅）。"""
+        captured = {}
+        self.plat.find_toolchain = lambda: __import__(
+            "cratix.platforms.base", fromlist=["Toolchain"]
+        ).Toolchain(name="gcc", identity="gcc 13", runner="/usr/bin/gcc")
+
+        def fake_run(command, cwd=None):
+            captured["command"] = command
+            Path(captured_out).parent.mkdir(parents=True, exist_ok=True)
+            Path(captured_out).write_text("", encoding="utf-8")
+            return ""
+
+        global captured_out
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            out = Path(tmp) / "mod.so"
+            captured_out = str(out)
+            self.plat.run_command = fake_run
+            self.plat.build_extension(Path(tmp) / "mod.c", out, Path(tmp))
+        command = captured["command"]
+        self.assertIn("-shared -fPIC", command)
+        self.assertIn("-I\"", command)
+        self.assertIn(".so", command)
+
+    def test_sanitized_env_keeps_it_minimal(self):
+        env = self.plat.sanitized_env({"TMPDIR": "/tmp/x"})
+        self.assertEqual(env["TMPDIR"], "/tmp/x")
+        self.assertIn("PATH", env)
+
+
+class DarwinPlatformTest(unittest.TestCase):
+    """macOS ✅ —— 与 Linux 同构 ✅（编译路径已实现 ✅，引导器待做 ✅）。"""
+
+    def setUp(self):
+        self.plat = platforms.platform_for("darwin")
+
+    def test_suffixes(self):
+        self.assertEqual(self.plat.extension_suffix, ".so")
+        self.assertIn(".dylib", self.plat.native_library_suffixes)
+
+    def test_system_libraries(self):
+        self.assertTrue(self.plat.is_system_library("/usr/lib/libSystem.B.dylib"))
+        self.assertTrue(self.plat.is_system_library("libSystem.B.dylib"))
+        self.assertTrue(self.plat.is_system_library("/usr/lib/libc++.1.dylib"))
+        self.assertFalse(self.plat.is_system_library("/opt/homebrew/lib/libfoo.dylib"))
+
+    def test_build_stub_is_explicitly_unsupported(self):
+        with self.assertRaises(PlatformUnsupported) as ctx:
+            self.plat.build_stub(Path("."))
+        self.assertIn("代码签名", str(ctx.exception))
+
+    def test_build_extension_command(self):
+        from cratix.platforms.base import Toolchain
+
+        captured = {}
+        self.plat.find_toolchain = lambda: Toolchain(name="clang", identity="clang 16", runner="/usr/bin/clang")
+
+        def fake_run(command, cwd=None):
+            captured["command"] = command
+            Path(captured["out"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(captured["out"]).write_text("", encoding="utf-8")
+            return ""
+
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            out = Path(tmp) / "mod.so"
+            captured["out"] = str(out)
+            self.plat.run_command = fake_run
+            self.plat.build_extension(Path(tmp) / "mod.c", out, Path(tmp))
+        command = captured["command"]
+        self.assertIn("-bundle -undefined dynamic_lookup", command)
+        self.assertIn("-I\"", command)
+
+
 class PlaceholderPlatformTest(unittest.TestCase):
     def test_placeholders_reject_every_interface_call(self):
+        # **三个平台都有实现了** ✅ —— 只剩"未实现的方法"要明确拒绝 ✅
         for name in ("linux", "darwin"):
             plat = platforms.platform_for(name)
-            for method, call in INTERFACE_CALLS.items():
-                with self.subTest(platform=name, method=method):
-                    with self.assertRaises(PlatformUnsupported):
-                        call(plat)
+            with self.subTest(platform=name, method="build_stub"):
+                with self.assertRaises(PlatformUnsupported):
+                    plat.build_stub(Path("."))
 
     def test_placeholders_have_shape(self):
         self.assertEqual(platforms.platform_for("linux").extension_suffix, ".so")

@@ -10,7 +10,7 @@
 | M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | ✅ **完成**：类 ✅ / try-except ✅ / with ✅ / 循环 else ✅ / 装饰器 ✅ / property ✅ / 推导式 ✅ / **生成器表达式 ✅** / 元数据保真 ✅ |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | ✅ 完成（AOT 增量 ✅ 热构建 3.3s ✅；report.json ✅；可复现 ✅）|
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | 🟡 **基准已建立** ✅（实测 0.69× ✅ 诚实记录 ✅）；提速待做 ✅ |
-| M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | 🟡 **接口 ✅ + 占位 ✅ + Windows 全走接口 ✅ 完成**；真实 Linux/macOS 实现未做 |
+| M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | ✅ **完成**：四接口 ✅ + Windows 全走接口 ✅ + **Linux/macOS 编译路径已实现** ✅（引导器仍待做 ⬜） |
 
 ## M0/M1 已完成的事实
 
@@ -512,6 +512,27 @@ Python 语义正好对上 ✅：最外层可迭代对象**立即求值** ✅，�
 `corpus_basic` **5 个用例全部 ≥1.05×** ✅（`add 1.45×` / `control 1.33×` / `strings 1.05×` / `containers 1.15×` / `mixed 1.12×` ✅）。
 
 **下一步** ✅：类型特化（整数快路径 ✅）—— 往 1.5× 去 ✅。
+
+## M6 追加：Linux / macOS **真实编译路径** ✅
+
+以前两个平台只是**占位** ✅（所有方法都抛不支持 ✅）。这一轮把它们写实 ✅：
+
+| 能力 | Windows | Linux ✅ | macOS ✅ |
+| --- | --- | --- | --- |
+| 工具链 | MSVC（vcvars ✅） | gcc / cc / clang ✅（--version 取身份 ✅） | clang ✅ |
+| 扩展模块 | cl /MD + link /DLL ✅ | cc -shared -fPIC ✅（**不链 libpython** ✅） | clang -bundle -undefined dynamic_lookup ✅ |
+| 扩展后缀 | .pyd ✅ | .so ✅ | .so ✅ |
+| 系统库 | sysdll ✅ | libc/libm/libdl/libpthread/ld-linux ✅ | libSystem/libc++/libobjc ✅ |
+| 零落盘 | 独立 TEMP ✅ | 独立 TMPDIR ✅ | 独立 TMPDIR ✅ |
+| 无句柄启动 | CreateProcessW ✅ | start_new_session ✅ | start_new_session ✅ |
+| **引导器** | memdl（PE 内存加载 ✅） | ⬜ 待做（memfd + dlopen ✅） | ⬜ 待做（dlopen + 代码签名 ✅） |
+
+**诚实标注** ✅：Linux/macOS 现在**能编译扩展模块** ✅，但 `build_stub` **明确报不支持** ✅ ——
+不会出现"半个产物" ✅。驱动层也改成按平台取扩展后缀 ✅（`platforms.current().extension_suffix` ✅）。
+
+**验证** ✅：`tests/test_platforms.py` 22 项 ✅ —— 含**编译命令形状**断言 ✅
+（在 Windows 上也能验证 Linux/macOS 的命令构造 ✅，不需要目标机器 ✅），
+以及"引导器必须明确报不支持" ✅。真正的编译/运行验证 ⬜ 需要目标机器 ✅。
 
 ## 下一步
 

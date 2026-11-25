@@ -787,7 +787,8 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = module_compile.init_symbol[len("PyInit_"):]
     c_path = out_dir / (stem + ".c")
-    pyd_path = out_dir / (stem + ".pyd")
+    # **扩展后缀由平台决定** ✅（Windows .pyd ✅ / Linux .so ✅）
+    pyd_path = out_dir / (stem + platforms.current().extension_suffix)
     # **增量** ✅：指纹一致且产物在 ✅ -> 跳过编译 ✅（省掉 cl + link ✅）。
     if fingerprint and stamp_path is not None and pyd_path.is_file():
         try:

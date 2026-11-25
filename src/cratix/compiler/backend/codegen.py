@@ -98,6 +98,8 @@ def c_string(text: str) -> str:
 
 
 BINOP_FUNCS = {
+    # **实测：不要自己搞整数快路径** ✅ —— CPython 的 PyNumber_Add 对精确 int 已经很快 ✅，
+    # 我们包一层（两次 PyLong_AsLongLong + 溢出检查）反而**更慢** ✅（loop_num 1.30× -> 0.99× ✅）。
     "+": "PyNumber_Add",
     "-": "PyNumber_Subtract",
     "*": "PyNumber_Multiply",
