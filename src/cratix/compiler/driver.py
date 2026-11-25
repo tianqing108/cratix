@@ -46,6 +46,8 @@ class ModuleCompile:
     module_reason: str = ""
     key_names: list = field(default_factory=list)
     module_gen: object = None
+    # **常量池** ✅（模块级字面量只创建一次 ✅）
+    consts: object = None
 
     @property
     def supported_names(self) -> list:
@@ -175,7 +177,7 @@ def _module_level_supported(stmt) -> bool:
     return False
 
 
-def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
+def compile_module(path: Path, module_name: str | None = None, const_pool: bool = True) -> ModuleCompile:
     """把一个 Python 模块编译成 C ✅（函数级判定 ✅）。"""
     path = Path(path)
     source = path.read_text(encoding="utf-8")
@@ -202,6 +204,9 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
 
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
+    # **常量池** ✅ —— 整模块一个 ✅（常量只建一次 ✅，循环里只 INCREF ✅）
+    # const_pool=False 只用于 **A/B 基准对照** ✅（产品路径永远开 ✅）
+    consts = codegen.ConstantPool() if const_pool else None
     # **函数级回退的字节码来源** ✅：编译整个模块 ✅ 从 co_consts 里取函数 code object ✅
     # （比"抠源码再编译"稳 ✅ —— 行号/闭包/默认值都保真 ✅）
     # 保留 helper ✅（未来可用于字节码级回退 ✅）—— 当前用**内嵌源码** ✅
@@ -217,7 +222,7 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
                 raise Unsupported("模块级装饰器（函数级回退）")
             check_function(stmt, scope)
             built = builder.build_stmt(stmt)
-            gen = codegen.FunctionGen(stmt.name, built.get("params"), built.get("body", []), scope)
+            gen = codegen.FunctionGen(stmt.name, built.get("params"), built.get("body", []), scope, consts)
             gen.emit_binding()
             for body_stmt in built.get("body", []):
                 gen.emit_stmt(body_stmt)
@@ -280,6 +285,7 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
                         self_params,
                         built.get("body", []),
                         method_scope,
+                        consts,
                     )
                     gen.emit_binding()
                     for body_stmt in built.get("body", []):
@@ -310,7 +316,7 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
     if module_stmts:
         try:
             module_ir = builder.build_module(ast.Module(body=module_stmts, type_ignores=[]))
-            module_gen = codegen.FunctionGen("<module>", None, [], Scope(name="<module>"))
+            module_gen = codegen.FunctionGen("<module>", None, [], Scope(name="<module>"), consts)
             for stmt in module_ir.get("body", []):
                 module_gen.emit_stmt(stmt)
         except Unsupported as exc:
@@ -332,7 +338,9 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
         None,
         result.fallback_code,
         result.classes,
+        consts,
     )
+    result.consts = consts
     return result
 
 def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path | None = None,
@@ -370,6 +378,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             alias_init=alias_init,
             fallback_code=module_compile.fallback_code,
             classes=module_compile.classes,
+            consts=module_compile.consts,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

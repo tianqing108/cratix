@@ -78,6 +78,21 @@ class GoldenModelTest(unittest.TestCase):
             )
             self.fail("IR-VM 与源码不一致：" + chr(10) + detail)
 
+    def test_constant_pool_is_used(self):
+        """**常量池** ✅ —— 字面量只建一次 ✅，生成的 C 里应当出现池变量 ✅。"""
+        from cratix.compiler import driver as cdriver
+
+        mc = cdriver.compile_module(CORPUS / "corpus_consts.py", "cratix_pool_test")
+        self.assertTrue(mc.module_ok, mc.module_reason)
+        self.assertIsNotNone(mc.consts)
+        # 三个函数各有一个字符串/bytes/整数常量 ✅ -> 池里至少 4 个 ✅
+        self.assertGreaterEqual(len(mc.consts.entries), 4)
+        self.assertIn("cratix_c0", mc.c_source)
+        self.assertIn("static PyObject *cratix_c0", mc.c_source)
+        # 关掉池 -> 不生成池变量 ✅（A/B 基准用 ✅）
+        mc2 = cdriver.compile_module(CORPUS / "corpus_consts.py", "cratix_pool_test", const_pool=False)
+        self.assertNotIn("static PyObject *cratix_c0", mc2.c_source)
+
     def test_unsupported_are_rejected(self):
         path = CORPUS / "corpus_unsupported.py"
         tree = diff.module_tree(path)

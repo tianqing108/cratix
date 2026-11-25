@@ -142,6 +142,18 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：常量池 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 44 | 加了常量池后整份 C **编译失败** ✅：`error C2143: 语法错误: 缺少"{"（在"*"之前）` + `C2065: "NULL": 未声明的标识符` | 池变量的 `static PyObject *...` 被插到了 **`#include <Python.h>` 之前** ✅ —— 那时 `PyObject` / `NULL` 都还没定义 ✅ | 声明**插到最后一个 `#include` 之后** ✅（文件作用域 ✅ 且类型可见 ✅） |
+| 45 | 常量池把 `True` 与 `1` 混成一个 ✅ | 键只用**值** ✅（`hash(True) == hash(1)` ✅ 且 `True == 1` ✅） | 键改成 **(类型名, 值)** ✅ |
+
+**为什么要池化** ✅：CPython 解释器是 `LOAD_CONST`（直接取 `co_consts` ✅ 零分配 ✅）；
+不池化的话 ✅ 循环里每轮都在 `PyLong_FromLongLong` / `PyUnicode_FromString` ✅ ——
+字符串/bytes 常量是**真分配** ✅（A/B 实测 `loop_str` **1.89×** 差距 ✅）。
+产品默认**开** ✅；`compile_module(..., const_pool=False)` 只用于 **A/B 对照** ✅。
+
 ## 追加：临时变量的**释放时机** ✅（长循环泄漏 ✅）
 
 | # | 现象 | 根因 | 修法 |

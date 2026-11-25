@@ -33,6 +33,9 @@ CASES = [
     ("corpus_basic", "strings", ("bob", 3), 200000),
     ("corpus_basic", "containers", ([1, 2, 3, 4, 5],), 100000),
     ("corpus_basic", "mixed", (1, 2, 3, 4), 200000),
+    # **常量池** ✅：循环里的字面量 ✅（字符串/bytes 每次新建会明显变慢 ✅）
+    ("corpus_consts", "loop_str", (20000,), 20),
+    ("corpus_consts", "loop_num", (20000,), 20),
 ]
 
 

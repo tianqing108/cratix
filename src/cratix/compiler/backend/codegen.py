@@ -122,6 +122,62 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+class ConstantPool:
+    """**模块级常量池** ✅ —— 每个字面量只创建一次 ✅。
+
+    不建池的话 ✅：循环里每轮都 `PyLong_FromLongLong(2)` / `PyUnicode_FromString(...)` ✅ ——
+    纯开销 ✅（CPython 解释器是直接把常量从 co_consts 里 LOAD_CONST ✅）。
+    池化之后 ✅：常量在模块初始化时建一次 ✅，用的时候只 `Py_INCREF` ✅。
+    """
+
+    def __init__(self):
+        self.entries = []          # [(C 变量名, 值)]
+        self.index = {}            # (类型名, 值) -> C 变量名
+
+    def ref(self, value) -> str:
+        # **类型进键** ✅ —— True / 1 / 1.0 是三个不同的常量 ✅
+        key = (type(value).__name__, value)
+        name = self.index.get(key)
+        if name is not None:
+            return name
+        name = "cratix_c" + str(len(self.entries))
+        self.index[key] = name
+        self.entries.append((name, value))
+        return name
+
+    def adopt(self, other) -> None:
+        """把另一个池的常量并进来 ✅（多个生成器共用一个模块 ✅）。"""
+        for _name, value in getattr(other, "entries", []):
+            self.ref(value)
+
+
+def emit_pool_statics(out: list, pool) -> None:
+    """常量池的**静态声明** ✅（翻译单元级 ✅ —— 所有函数共享 ✅）。
+
+    **插到 `#include` 之后** ✅ —— 声明必须在文件作用域 ✅，
+    而且类型 `PyObject` 要先由 `Python.h` 声明 ✅（插在开头会 C2143 ✅ 实测 ✅）。
+    """
+    if pool is None or not pool.entries:
+        return
+    decls = [""]
+    for name, _value in pool.entries:
+        decls.append("static PyObject *" + name + " = NULL;")
+    index = 0
+    for i, line in enumerate(out):
+        if line.startswith("#include"):
+            index = i + 1
+    out[index:index] = decls
+
+
+def emit_pool_init(out: list, pool, indent: str = "    ") -> None:
+    """常量池的**初始化** ✅（模块 init 里执行一次 ✅）。"""
+    if pool is None or not pool.entries:
+        return
+    for name, value in pool.entries:
+        out.append(indent + name + " = " + const_expr(value) + ";")
+        out.append(indent + "if (" + name + " == NULL) return -1;")
+
+
 def generate_function(gen: FunctionGen) -> str:
     """生成一个函数的完整 C 代码 ✅。"""
     nl = chr(10)
@@ -214,7 +270,8 @@ def module_body_parts(gen: FunctionGen):
 
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
                                  key_names: list, module_gen=None, alias_init: str | None = None,
-                                 fallback_code: dict | None = None, classes: list | None = None) -> str:
+                                 fallback_code: dict | None = None, classes: list | None = None,
+                                 consts=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -257,6 +314,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("")
     # --- 模块体 ✅（在 init 里执行一次 ✅）---
     out.append("static int cratix_run_body(PyObject *m) {")
+    # **常量池初始化** ✅（模块 init 里只做一次 ✅ —— 函数与模块体都要用 ✅）
+    emit_pool_init(out, consts)
     body_decls = []
     body_cleanup = []
     if module_gen is not None:
@@ -497,6 +556,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("PyMODINIT_FUNC " + alias_init + "(void) {")
         out.append("    return " + init_symbol + "();")
         out.append("}")
+    # **常量池的静态声明** ✅ —— 放在 include 之后 ✅（必须在文件作用域 ✅）
+    emit_pool_statics(out, consts)
     return nl.join(out) + nl
 
 def generate_module(module_name: str, init_symbol: str, functions: list, key_names: list,
@@ -595,8 +656,12 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
 class FunctionGen:
     """生成一个函数的 C 代码 ✅。"""
 
-    def __init__(self, func_name, params, body, scope):
+    def __init__(self, func_name, params, body, scope, consts=None, use_pool=True):
         self.func_name = func_name
+        # **常量池** ✅（同一模块的生成器共用一个 ✅ —— 见 driver ✅）
+        self.consts = consts if consts is not None else ConstantPool()
+        # **A/B 开关** ✅：关掉就退回"每次新建" ✅（基准对照用 ✅，产品默认开 ✅）
+        self.use_pool = use_pool and consts is not None
         self.params = params
         self.body = body
         self.scope = scope
@@ -1367,7 +1432,13 @@ class FunctionGen:
         kind = node.kind
         t = self.new_tmp()
         if kind == "const":
-            self.emit(t + " = " + const_expr(node.get("value")) + ";")
+            if self.use_pool:
+                # **走常量池** ✅ —— 只 INCREF ✅，不再每次新建 ✅
+                name = self.consts.ref(node.get("value"))
+                self.emit(t + " = " + name + ";")
+                self.emit("Py_INCREF(" + t + ");")
+            else:
+                self.emit(t + " = " + const_expr(node.get("value")) + ";")
             return t
         if kind == "name":
             name = node.get("id")
