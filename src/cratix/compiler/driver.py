@@ -683,10 +683,33 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     lambda_gens: list = []
     lambda_names: dict = {}
     lambda_captures: dict = {}
+    # **模块级控制流里的 def** ✅（(行, 列) -> {内部名, 公开名} ✅）
+    mdef_names: dict = {}
     # **没法编译的 lambda** ✅（外层函数用到它时必须回退 ✅ 不能静默 ✅）
     lambda_blocked: set = set()
     # **模块级的 lambda** ✅ —— 以前只扫函数/方法体 ✅ ->
     # `X = lambda v: ...` 这种模块级语句会 "lambda（未登记）" ✅ -> **整个模块**回退 ✅（实测 21 个 ✅）
+    # **模块级控制流里的 `def`** ✅ —— `if cond: def f(): ...` 这种 ✅
+    # 以前走到模块体生成就 "嵌套定义（未登记）" ✅ -> **整个模块**回退 ✅（实测 54 个 ✅）。
+    # 做法与 lambda 一致 ✅：编成**模块级原生函数** ✅，在 def 语句处把**公开名**绑上去 ✅。
+    for stmt in module_stmts:
+        for child in ast.walk(stmt):
+            if not isinstance(child, ast.FunctionDef):
+                continue
+            key = (getattr(child, "lineno", 0), getattr(child, "col_offset", 0))
+            if key in mdef_names:
+                continue
+            try:
+                built = builder.build_function(child)
+            except Unsupported as exc:
+                result.plans.append(FunctionPlan(child.name, False, exc.reason))
+                continue
+            name = "_cratix_mdef_" + str(len(mdef_names))
+            mdef_names[key] = {"name": name, "public": child.name}
+            lambda_names[key] = name
+            lambda_captures[key] = []
+            lambda_gens.append((name, built, []))
+
     for stmt in module_stmts:
         for child in ast.walk(stmt):
             if not isinstance(child, ast.Lambda):
@@ -1121,6 +1144,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             "<module>", None, [], Scope(name="<module>"), consts,
             package=module_name.rpartition(".")[0],
             lambda_names=lambda_names,
+            mdef_names=mdef_names,
         )
             # **模块体是在这里就地生成的** ✅ -> 控制流里的类要先能查到源码 ✅
             module_gen.inline_class_sources = dict(result.inline_class_sources)

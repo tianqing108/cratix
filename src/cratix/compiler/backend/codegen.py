@@ -1123,7 +1123,7 @@ class FunctionGen:
                  class_methods=None, self_attr_writes=None, method_mode=False,
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
                  cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
-                 genexp_captures=None, deleted_locals=None):
+                 genexp_captures=None, deleted_locals=None, mdef_names=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -1175,6 +1175,8 @@ class FunctionGen:
         self.attr_used: dict = {}
         # **会被 `del` 的局部名** ✅ —— 读它们时要检查 NULL ✅（UnboundLocalError ✅）
         self.deleted_locals = set(deleted_locals or ())
+        # **模块级控制流里的 def** ✅（(行, 列) -> {内部名, 公开名} ✅）
+        self.mdef_names: dict = dict(mdef_names or {})
         # **match 语句的标签编号** ✅
         self.match_index = 0
         # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
@@ -2408,6 +2410,15 @@ class FunctionGen:
                 self.emit(tmp + " = NULL;")
             return
         if kind == "funcdef":
+            # **模块级控制流里的 def** ✅ —— 原生函数在 helper ns 里 ✅，
+            # 这里把**公开名**绑到模块字典 ✅（条件分支要不要执行由 C 结构决定 ✅）。
+            mdef = (self.mdef_names or {}).get(node.get("key"))
+            if mdef:
+                tmp = self.new_tmp()
+                self.emit(tmp + " = PyDict_GetItemString(cratix_helper_ns, " + c_string(mdef["name"]) + ");")
+                self.emit("if (" + tmp + " == NULL) { PyErr_SetString(PyExc_NameError, \"cratix: module def missing\"); goto cratix_error; }")
+                self.emit("if (PyDict_SetItemString(cratix_globals, " + c_string(mdef["public"]) + ", " + tmp + ") < 0) goto cratix_error;")
+                return
             # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）
             self.emit_inner_def(node)
             return
