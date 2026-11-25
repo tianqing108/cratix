@@ -391,6 +391,8 @@ def generate_function(gen: FunctionGen) -> str:
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    for name in getattr(gen, "int64_helpers", []):
+        decls.append("    long long " + name + " = 0;")
     if getattr(gen, "needs_cur_exc", False):
         decls.append("    PyObject *cratix_cur_exc = NULL;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
@@ -447,6 +449,8 @@ def module_body_parts(gen: FunctionGen):
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    for name in getattr(gen, "int64_helpers", []):
+        decls.append("    long long " + name + " = 0;")
     if getattr(gen, "needs_cur_exc", False):
         decls.append("    PyObject *cratix_cur_exc = NULL;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
@@ -1148,6 +1152,8 @@ class FunctionGen:
         self.tmp_names: list[str] = []
         self.helper_names: list[str] = []
         self.int_helpers: list[str] = []
+        # **int64 临时量** ✅ —— range 快路径的计数器 ✅（函数顶部 long long 声明 ✅）
+        self.int64_helpers: list[str] = []
         self.declared_attrs: set = set()
         self.try_blocks: list = []
         self.with_blocks: list = []
@@ -1897,6 +1903,109 @@ class FunctionGen:
         self.emit(seq + " = NULL;")
 
     # ---------- 循环 ✅ ----------
+    def _range_args(self, node):
+        """`range(...)` 的实参 IR 节点 ✅（1~3 个 ✅ 无关键字 ✅）；否则 None ✅。"""
+        if node.kind != "call" or node.get("keywords"):
+            return None
+        head = node.kids[0]
+        if head.kind != "name" or head.get("id") != "range":
+            return None
+        args = list(node.kids[1:])
+        if not 1 <= len(args) <= 3:
+            return None
+        return args
+
+    def emit_range_loop(self, node, rng_args) -> None:
+        """**`for i in range(...)` 的快路径** ✅ —— 免掉迭代器协议 ✅。
+
+        语义**完全等价** ✅（保守判定 ✅）：
+        - 三个参数先走 `PyNumber_Index` ✅（与 `range` 一致 ✅ —— 非整数会抛 TypeError ✅）；
+        - 转成 `long long` ✅，**溢出就退回**通用迭代器路径 ✅（大范围仍然正确 ✅）；
+        - 每轮自己造一个 PyLong 给 `i` ✅ —— 与迭代器给的那个**对象语义相同** ✅。
+        所以**没有任何可观察差异** ✅：`i` 还是真的 int 对象 ✅、`range` 的边界/步长语义照旧 ✅。
+        """
+        # **迭代器/range 对象要在 begin_loop 之前申请** ✅ ——
+        # 循环体末尾的清理会释放"begin_loop 之后新建的临时变量/辅助变量" ✅，
+        # 把 rng/it 放在之后 ✅ -> 第一轮结束就被释放 ✅ -> 崩溃 ✅（实测 ✅）。
+        it = self.new_helper()
+        rng = self.new_tmp()
+        item = self.new_tmp()
+        depth_var, broke_var = self.begin_loop()
+        srcs = [self.emit_expr(arg) for arg in rng_args]
+        idx = [self.new_int_helper() for _ in range(3)]
+        cur = "cratix_rcur_" + str(self.loop_index)
+        stop = "cratix_rstop_" + str(self.loop_index)
+        step = "cratix_rstep_" + str(self.loop_index)
+        for name in (cur, stop, step):
+            if name not in self.int64_helpers:
+                self.int64_helpers.append(name)
+        fast = "cratix_rfast_" + str(self.loop_index)
+        if fast not in self.int_helpers:
+            self.int_helpers.append(fast)
+        # **构造真正的 range 对象** ✅ —— 慢路径直接用它 ✅（也保住异常语义 ✅）
+        self.emit(rng + " = PyObject_CallFunctionObjArgs((PyObject *)&PyRange_Type, "
+                  + ", ".join(srcs) + ", NULL);" if len(srcs) == 1 else
+                  rng + " = PyObject_CallFunctionObjArgs((PyObject *)&PyRange_Type, "
+                  + ", ".join(srcs) + ", NULL);")
+        self.emit("if (" + rng + " == NULL) goto cratix_error;")
+
+        # **快路径判定** ✅：三个参数都是精确 int ✅ 且都能装进 int64 ✅
+        def _conv(pos: int, arg_src: str, var: str, fallback: str) -> None:
+            self.emit("    " + idx[pos] + " = PyLong_AsLongLong(" + arg_src + ");")
+
+        self.emit(fast + " = 1;")
+        self.emit("if (!(PyLong_CheckExact(" + srcs[0] + "))) " + fast + " = 0;")
+        if len(srcs) >= 2:
+            self.emit("if (!(PyLong_CheckExact(" + srcs[1] + "))) " + fast + " = 0;")
+        if len(srcs) >= 3:
+            self.emit("if (!(PyLong_CheckExact(" + srcs[2] + "))) " + fast + " = 0;")
+        self.emit("if (" + fast + ") {")
+        self.emit("    PyErr_Clear();")
+        self.emit("    " + cur + " = PyLong_AsLongLong(" + srcs[0] + ");")
+        self.emit("    if (" + cur + " == -1 && PyErr_Occurred()) { PyErr_Clear(); " + fast + " = 0; }")
+        if len(srcs) >= 2:
+            self.emit("    if (" + fast + ") {")
+            self.emit("        " + stop + " = PyLong_AsLongLong(" + srcs[1] + ");")
+            self.emit("        if (" + stop + " == -1 && PyErr_Occurred()) { PyErr_Clear(); " + fast + " = 0; }")
+            self.emit("    }")
+        else:
+            self.emit("    " + stop + " = " + cur + ";")
+            self.emit("    " + cur + " = 0;")
+        if len(srcs) >= 3:
+            self.emit("    if (" + fast + ") {")
+            self.emit("        " + step + " = PyLong_AsLongLong(" + srcs[2] + ");")
+            self.emit("        if (" + step + " == -1 && PyErr_Occurred()) { PyErr_Clear(); " + fast + " = 0; }")
+            self.emit("    }")
+        else:
+            self.emit("    " + step + " = 1;")
+        self.emit("}")
+        self.emit("if (!" + fast + ") {")
+        self.emit("    " + it + " = PyObject_GetIter(" + rng + ");")
+        self.emit("    if (" + it + " == NULL) goto cratix_error;")
+        self.emit("}")
+
+        self.emit("while (1) {")
+        self.emit("    if (" + fast + ") {")
+        self.emit("        if (" + step + " > 0 ? " + cur + " >= " + stop + " : " + cur + " <= " + stop + ") break;")
+        self.emit("        " + item + " = PyLong_FromLongLong(" + cur + ");")
+        self.emit("        if (" + item + " == NULL) goto cratix_error;")
+        self.emit("        " + cur + " += " + step + ";")
+        self.emit("    } else {")
+        self.emit("        " + item + " = PyIter_Next(" + it + ");")
+        self.emit("        if (" + item + " == NULL) { if (PyErr_Occurred()) goto cratix_error; break; }")
+        self.emit("    }")
+        self.emit_assign(node.kids[0], item)
+        for stmt in node.get("body", []):
+            self.emit_stmt(stmt)
+        self.emit("    ")
+        self.end_loop_body()
+        self.emit("}")
+        self.emit("Py_XDECREF(" + it + ");")
+        self.emit(it + " = NULL;")
+        self.emit("Py_DECREF(" + rng + ");")
+        self.emit(rng + " = NULL;")
+        self.end_loop(broke_var, node.get("orelse", []))
+
     def begin_loop(self):
         """开一个循环 ✅ —— 记录**栈深度** ✅ 与 **break 标志** ✅。
 
@@ -2146,6 +2255,10 @@ class FunctionGen:
         if kind == "for":
             # **迭代器在进入循环前建好** ✅ —— 这样"循环体内"的辅助变量集合是干净的 ✅
             # （每轮结束要释放体内辅助变量 ✅；迭代器本身不能释放 ✅）
+            rng_args = self._range_args(node.kids[1])
+            if rng_args is not None:
+                self.emit_range_loop(node, rng_args)
+                return
             iter_expr = self.emit_expr(node.kids[1])
             it = self.new_helper()
             depth_var, broke_var = self.begin_loop()
