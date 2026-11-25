@@ -143,6 +143,19 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_finally(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_finally.py", "cratix_corpus_finally", out_dir)
+    cases = [
+        "simple", "with_exception", "with_return", "with_break", "with_continue",
+        "else_runs", "else_skipped", "nested", "value_after",
+    ]
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "values": {name: getattr(mod, name)() for name in cases},
+    }
+
+
 def op_methods(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_methods.py", "cratix_corpus_methods", out_dir)
     return {
@@ -304,6 +317,8 @@ def main() -> int:
             data = op_genexp(out_dir)
         elif op == "methods":
             data = op_methods(out_dir)
+        elif op == "finally":
+            data = op_finally(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

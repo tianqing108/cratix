@@ -25,6 +25,38 @@ MAX_TRY_DEPTH = 8
 MAX_TRY_HANDLERS = 4
 # **with 帧的编号基址** ✅（>= 该值即 with 帧 ✅ —— 与 try 帧区分 ✅）。
 WITH_FRAME_BASE = 1000
+# **finally 帧的编号基址** ✅（再高一档 ✅）
+FINALLY_FRAME_BASE = 2000
+# finally 嵌套上限 ✅（与 try 共用同一个栈 ✅）
+MAX_FINALLY_DEPTH = MAX_TRY_DEPTH
+
+
+class _TryBody:
+    """try 的"内层" ✅ —— 剥掉 finally 之后要执行的语句 ✅。
+
+    有 handler -> 生成一个**没有 finally 的 try 节点** ✅（复用同一套 handler 分派 ✅）；
+    没有 handler -> 直接是 body（+ else）✅（纯 try/finally 不压 try 帧 ✅）。
+    """
+
+    def __init__(self, node):
+        self.body = list(node.get("body", []))
+        self.handlers = list(node.get("handlers", []))
+        self.orelse = list(node.get("orelse", []))
+
+    def statements(self) -> list:
+        if not self.handlers:
+            return list(self.body) + list(self.orelse)
+        from .. import ir as _ir
+
+        return [
+            _ir.node(
+                "try",
+                body=self.body,
+                handlers=self.handlers,
+                orelse=self.orelse,
+                finalbody=[],
+            )
+        ]
 
 
 def c_ident(name: str) -> str:
@@ -824,6 +856,10 @@ class FunctionGen:
         self.declared_attrs: set = set()
         self.try_blocks: list = []
         self.with_blocks: list = []
+        # **finally 块栈** ✅ —— return/break/continue 要先把它们跑掉 ✅
+        self.finally_blocks: list = []
+        # **所有 finally 块** ✅（分派处要按编号找到它 ✅ —— 生成结束时栈已清空 ✅）
+        self.finally_all: list = []
         # **生成器表达式的辅助函数** ✅（名字 -> 源码 ✅ —— 模块 init 里建出来 ✅）
         self.genexp_sources: dict = {}
         # **推导式作用域栈** ✅ —— 每层推导式一个 {名字: C 临时变量} ✅
@@ -1012,8 +1048,11 @@ class FunctionGen:
         - handler 跑完 ✅ → 跳到该 try 的结束标签 ✅ ✅（继续执行 ✅）；
         - 没有 handler 匹配 ✅ → 弹栈 ✅ → 继续外层 try ✅ ✅ → 都没有 ✅ → 真错误 ✅ ✅。
         """
-        if node.get("orelse") or node.get("finalbody"):
-            raise Unsupported("try/else/finally（尚未实现）")
+        if node.get("finalbody"):
+            # **try/.../finally** ✅：先处理内层（body + handlers + else ✅），再包一层 finally ✅
+            inner = _TryBody(node)
+            self.emit_finally(node.get("finalbody", []), inner)
+            return
         handlers = node.get("handlers", [])
         if not handlers:
             raise Unsupported("没有 handler 的 try")
@@ -1056,10 +1095,54 @@ class FunctionGen:
         for j in range(len(handlers)):
             self.emit("    Py_XDECREF(cratix_try_types[cratix_ti][" + str(j) + "]);")
             self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = NULL;")
+        # **else 只在这条"正常完成"的路上跑** ✅（handler 直接跳到结束标签 ✅ -> 不跑 else ✅）
+        for stmt in node.get("orelse", []):
+            self.emit_stmt(stmt)
         self.emit("    goto cratix_try_end_" + str(try_id) + ";")
         self.emit("}")
         # **结束标签** ✅ —— handler 跑完后跳到这里 ✅（继续执行 ✅ ✅）
         self.emit("cratix_try_end_" + str(try_id) + ": ;")
+
+    def emit_finally(self, finalbody, inner) -> None:
+        """**finally** ✅ —— 四条路都要跑 ✅（正常 ✅ / 异常 ✅ / return-break-continue ✅）。
+
+        做法 ✅：finally 体先生成一份**行列表** ✅ ->
+        - 正常路径：body 之后直接内联 ✅；
+        - 异常路径：分派里跑它 ✅ 然后**继续抛** ✅；
+        - return/break/continue：跳之前把它们（由内向外 ✅）内联 ✅。
+        代价是 finally 体被复制几份 ✅ —— 但正确性最好懂 ✅。
+        """
+        fid = FINALLY_FRAME_BASE + len(self.finally_blocks)
+        saved = self.lines
+        self.lines = []
+        for stmt in finalbody:
+            self.emit_stmt(stmt)
+        body_lines = self.lines
+        self.lines = saved
+        self.emit("{")
+        self.emit("    if (cratix_try_n >= " + str(MAX_TRY_DEPTH) + ") {")
+        self.emit("        PyErr_SetString(PyExc_RuntimeError, \"cratix: try/with nesting too deep\");")
+        self.emit("        goto cratix_error;")
+        self.emit("    }")
+        self.emit("    int cratix_ti = cratix_try_n++;")
+        self.emit("    cratix_try_idx[cratix_ti] = " + str(fid) + ";")
+        self.finally_blocks.append({"id": fid, "lines": body_lines})
+        self.finally_all.append({"id": fid, "lines": body_lines})
+        for stmt in inner.statements():
+            self.emit_stmt(stmt)
+        self.finally_blocks.pop()
+        self.emit("    cratix_try_n--;")
+        for line in body_lines:
+            self.emit(line)
+        self.emit("}")
+        self.emit("cratix_finally_end_" + str(fid) + ": ;")
+
+    def emit_finally_runaways(self, since_depth: int = 0) -> None:
+        """return / break / continue 之前 ✅：把**还在栈上的 finally 体**由内向外跑掉 ✅。"""
+        for block in reversed(self.finally_blocks[since_depth:]):
+            for line in block["lines"]:
+                self.emit(line)
+
 
     def emit_try_handlers(self) -> list:
         """错误处的 handler 分派 ✅（switch ✅ —— handler 体需要看见外层局部变量 ✅ ✅）。
@@ -1107,6 +1190,18 @@ class FunctionGen:
                     self.emit(line)
                 self.emit("                    goto cratix_try_end_" + str(try_id) + ";")
                 self.emit("                }")
+            self.emit("                break;")
+            self.emit("            }")
+        for block in self.finally_all:
+            fid = block["id"]
+            self.emit("            case " + str(fid) + ": {")
+            self.emit("                cratix_try_n--;")
+            for line in block["lines"]:
+                self.emit(line)
+            # **跑完 finally 继续抛** ✅（finally 里的 return 会自己跳走 ✅）
+            self.emit("                PyErr_Restore(cratix_et, cratix_ev, cratix_etb);")
+            self.emit("                cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            self.emit("                goto cratix_error;")
             self.emit("                break;")
             self.emit("            }")
         for wid in self.with_blocks:
@@ -1231,6 +1326,8 @@ class FunctionGen:
             "broke": broke_var,
             "tmp": self.tmp_index,
             "helpers": len(self.helper_names),
+            # **循环开始时已有的 finally 块数** ✅（break/continue 只跑"循环体内"的 ✅）
+            "finally": len(self.finally_blocks),
         })
         return depth_var, broke_var
 
@@ -1413,7 +1510,8 @@ class FunctionGen:
                 self.emit(t + " = NULL;")
             else:
                 self.emit("result = Py_NewRef(Py_None);")
-            # **return 要先退栈** ✅ —— 里面的 with 必须跑 __exit__ ✅ ✅
+            # **return 先跑 finally** ✅ 再退栈（里面的 with 必须跑 __exit__ ✅ ✅）
+            self.emit_finally_runaways()
             self.emit("goto cratix_unwind;")
             return
         if kind == "if":
@@ -1468,6 +1566,8 @@ class FunctionGen:
                 raise Unsupported("break 不在循环里")
             frame = self.loop_stack[-1]
             self.emit(frame["broke"] + " = 1;")
+            # **循环体内的 finally 先跑** ✅（Python 语义 ✅）
+            self.emit_finally_runaways(frame["finally"])
             self.emit_unwind_to(frame["depth"])
             # **跳之前也要放** ✅（否则这条路径上的引用会留到函数出口 ✅）
             self.emit_tmp_cleanup(frame["tmp"])
@@ -1478,6 +1578,7 @@ class FunctionGen:
             if not self.loop_stack:
                 raise Unsupported("continue 不在循环里")
             frame = self.loop_stack[-1]
+            self.emit_finally_runaways(frame["finally"])
             self.emit_unwind_to(frame["depth"])
             self.emit_tmp_cleanup(frame["tmp"])
             self.emit_helper_cleanup(frame["helpers"])

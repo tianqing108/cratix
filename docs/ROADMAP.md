@@ -274,6 +274,26 @@
 未知平台明确报错 ✅、**源码守卫**（pipeline/cli/driver 里不许再出现 `stubbuild.` / `sysdll.` / `verify.` ✅ 且必须调用 `platforms.current()` ✅）。
 端到端 ✅：示例工程仍然构建成功 ✅、两次构建 sha256 一致 ✅、`verify --zero-disk` 走平台接口 PASS ✅。
 
+## M3 追加：try/else + try/finally ✅
+
+**修前** ✅：`try/else/finally` 一律**整函数回退** ✅（codegen 直接 `Unsupported` ✅）。
+
+**做法** ✅：
+
+- **else** ✅：只在"正常完成"那条路上跑 ✅ —— handler 直接跳到结束标签 ✅ -> 不跑 else ✅；
+- **finally** ✅：finally 体先生成一份**行列表** ✅，然后四条路都内联它 ✅：
+  1. 正常 ✅（body 之后 ✅）；
+  2. 异常 ✅（分派里 push 一个 **finally 帧** ✅ -> 跑 finally ✅ -> `PyErr_Restore` **继续抛** ✅）；
+  3. `return` ✅（跳之前由内向外跑还在栈上的 finally 体 ✅）；
+  4. `break` / `continue` ✅（只跑**循环体内**的 ✅ —— 循环开始时记下栈深 ✅）；
+- **try/except/finally** ✅：先剥掉 finally ✅ 生成一个"没有 finally 的 try"✅（handler 分派完全复用 ✅），
+  再包一层 finally ✅ —— 不需要写第二套异常机制 ✅。
+- **纯 try/finally** ✅：不压 try 帧 ✅（没有 handler 要分派 ✅）。
+
+**实测** ✅（`tests/corpus/corpus_finally.py` ✅）：9 个用例与源码**逐字一致** ✅ ——
+正常 ✅ / 异常 ✅ / `return` ✅ / `break` ✅ / `continue` ✅ / else 跑与不跑 ✅ /
+嵌套 finally（内层异常 ✅ -> 外层 finally ✅）/ 循环里 finally 累加 ✅。
+
 ## M3 追加：生成器表达式 ✅（M3 收尾）
 
 **为什么难** ✅：生成器要**真惰性** ✅（暂停/恢复 ✅）—— 在 C 里手写状态机工作量巨大 ✅。

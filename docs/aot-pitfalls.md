@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：try/finally ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 64 | `finally` 里的语句在 `return` 路径上**不执行** ✅ | 我们只在"正常完成"处内联 finally ✅ | 生成一份**行列表** ✅，`return` / `break` / `continue` 之前由内向外内联 ✅ |
+| 65 | 异常路径跑完 finally 后**异常被吞** ✅ | 分派里只执行 finally 体 ✅、没把异常还回去 ✅ | finally 帧的 case 里跑完 `PyErr_Restore(...)` + `goto cratix_error` ✅（**继续抛** ✅） |
+| 66 | `break` 把**外层**的 finally 也跑了 ✅ | 直接跑整个 finally 栈 ✅ | 循环开始时记录**栈深** ✅ -> 只跑"循环体内"的 ✅ |
+
 ## 追加：原生方法描述符 ✅
 
 | # | 现象 | 根因 | 修法 |

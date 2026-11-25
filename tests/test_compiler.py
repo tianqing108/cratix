@@ -59,6 +59,15 @@ CASES = [
     ("corpus_genexp.py", "passthrough", [()]),
     ("corpus_genexp.py", "shadowed", [([1, 22],)]),
     ("corpus_genexp.py", "captured", [([1, 2], 10)]),
+    # try/else + try/finally ✅
+    ("corpus_finally.py", "simple", [()]),
+    ("corpus_finally.py", "with_exception", [()]),
+    ("corpus_finally.py", "with_break", [()]),
+    ("corpus_finally.py", "with_continue", [()]),
+    ("corpus_finally.py", "else_runs", [()]),
+    ("corpus_finally.py", "else_skipped", [()]),
+    ("corpus_finally.py", "nested", [()]),
+    ("corpus_finally.py", "value_after", [()]),
 ]
 
 

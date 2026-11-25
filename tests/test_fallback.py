@@ -190,6 +190,22 @@ class FunctionFallbackTest(unittest.TestCase):
         # **被实例属性覆盖过的方法不许直调** ✅（否则会绕过覆盖 ✅）
         self.assertFalse(data["shadow_direct"], "被覆盖的 self.step 不应直调")
 
+    def test_12_try_else_finally(self):
+        """try/else + try/finally ✅ —— 正常 / 异常 / return / break / continue 五条路都要跑 finally ✅。"""
+        data = run_worker("finally")
+        values = data["values"]
+        self.assertEqual(values["simple"], "body|finally")
+        self.assertEqual(values["with_exception"], "body|finally|caught")
+        self.assertEqual(values["with_return"], ["ret", "body|finally"])
+        self.assertEqual(values["with_break"], "iter0|fin0|iter1|fin1")
+        self.assertEqual(values["with_continue"], "iter0|fin0|fin1|iter2|fin2")
+        self.assertEqual(values["else_runs"], "body|else")
+        self.assertEqual(values["else_skipped"], "body|caught")
+        self.assertEqual(values["nested"], "inner|fin-inner|caught|fin-outer")
+        self.assertEqual(values["value_after"], 44)
+        # 只有"带嵌套 def"的那个回退 ✅（闭包不支持 ✅）
+        self.assertEqual(data["fallback"], ["with_return"])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
