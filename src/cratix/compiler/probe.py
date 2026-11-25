@@ -42,14 +42,9 @@ def _run(spec: dict) -> dict:
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": "探针输出不是 JSON：" + str(exc)}
 
-# **编译器自己的内部名字** ✅ —— 它们会出现在 AOT 模块的命名空间里 ✅
-# （生成器表达式辅助函数 ✅ / 装饰方法的原生跳板 ✅ / 类工厂 ✅ 等 ✅）。
-# 差分探针**只忽略这些前缀** ✅ —— 其它任何多出/缺少的名字都照报 ✅。
-INTERNAL_PREFIXES = ("_cratix_", "cratix_")
-
-
-def _is_internal(name: str) -> bool:
-    return name.startswith(INTERNAL_PREFIXES)
+# **内部辅助名字** ✅ 现在**一个都不会出现在 AOT 模块的命名空间里** ✅（#129 收尾 ✅）——
+# 生成器辅助 ✅ 跳板 ✅ 类工厂 ✅ 都住在 `cratix_helper_ns` ✅。
+# 所以这里**不做任何豁免** ✅：AOT 模块多出一个 `cratix_*` 就是回归 ✅。
 
 
 def compare(source: dict, aot: dict) -> list[str]:
@@ -64,8 +59,6 @@ def compare(source: dict, aot: dict) -> list[str]:
     for name in sorted(src_names - aot_names):
         diffs.append("AOT 版缺少名字：" + name)
     for name in sorted(aot_names - src_names):
-        if _is_internal(name):
-            continue
         diffs.append("AOT 版多出名字：" + name)
     src_fns = source.get("functions", {})
     aot_fns = aot.get("functions", {})
