@@ -277,6 +277,8 @@ def generate_function(gen: FunctionGen) -> str:
     cleanup = []
     # **cratix_kwv 是借用引用** ✅（PyDict_GetItemWithError ✅）—— **不能 DECREF** ✅
     # （多 DECREF 一次 ✅ → 提前释放 ✅ → 后续 use-after-free ✅ → 访问违例 ✅）
+    if getattr(gen, "method_mode", False):
+        cleanup.append("    Py_XDECREF(cratix_shifted);")
     cleanup.append("    Py_XDECREF(cratix_kw);")
     for name in sorted(gen.scope.locals_):
         cleanup.append("    Py_XDECREF(" + c_ident(name) + ");")
@@ -452,8 +454,11 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("    cratix_cls_" + c_ident(cls["name"]) + "_slots")
         out.append("};")
         out.append("")
+        descriptors = set(cls.get("descriptor_methods") or ())
         out.append("static PyMethodDef cratix_cls_" + c_ident(cls["name"]) + "_methods[] = {")
         for method_name, _gen in cls.get("methods", []):
+            if method_name in descriptors:
+                continue
             cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(cls["name"] + "." + method_name)
             # **私有名带类名** ✅ —— 不同类的同名方法（如 __init__ ✅）不会冲突 ✅
             private = "_cratix_" + cls["name"] + "_" + method_name
@@ -461,8 +466,23 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("    {NULL, NULL, 0, NULL}")
         out.append("};")
         out.append("")
+        # **原生方法描述符表** ✅（公开方法名 ✅ —— 描述符按这个方法名建 ✅）
+        if descriptors:
+            out.append("static PyMethodDef cratix_cls_" + c_ident(cls["name"]) + "_desc[] = {")
+            for method_name, gen in cls.get("methods", []):
+                if method_name not in descriptors:
+                    continue
+                cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(cls["name"] + "." + method_name)
+                doc = method_doc(method_name, (func_meta or {}).get(cls["name"] + "." + method_name))
+                out.append("    {" + q + method_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, " + c_string(doc) + "},")
+            out.append("    {NULL, NULL, 0, NULL}")
+            out.append("};")
+            out.append("")
         # **跳板源码** ✅：把 self 传给原生方法 ✅（普通 PyCFunction ✅ 不绑定 self ✅）
+        # **无装饰器的方法不再要跳板** ✅ —— 它们直接以**原生方法描述符**挂到类上 ✅（省一个 Python 帧 ✅）
         for method_name, _gen in cls.get("methods", []):
+            if method_name in descriptors:
+                continue
             tb_name = "_cratix_tb_" + cls["name"] + "_" + method_name
             private = "_cratix_" + cls["name"] + "_" + method_name
             src = trampoline_source(tb_name, private, _gen.params)
@@ -532,6 +552,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("    }")
     # --- 类 ✅：用堆类型创建 ✅（type(name, (object,), ns) ✅）---
     for cls in classes:
+        # **每个类自己的描述符集合** ✅（循环不隔离作用域 ✅ —— 复用上一个类的集合会漏跳过 ✅）
+        descriptors = set(cls.get("descriptor_methods") or ())
         table = "cratix_cls_" + c_ident(cls["name"]) + "_methods"
         out.append("    {")
         pass
@@ -543,7 +565,11 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         pass
 
 
-        for idx, (method_name, _gen) in enumerate(cls.get("methods", [])):
+        # **只给"跳板方法"建私有 PyCFunction** ✅ —— 表里也只有它们 ✅（索引必须对齐 ✅）
+        trampoline_methods = [
+            (name, gen) for name, gen in cls.get("methods", []) if name not in descriptors
+        ]
+        for idx, (method_name, _gen) in enumerate(trampoline_methods):
             out.append("        {")
             out.append("            PyObject *fn = PyCFunction_NewEx(&" + table + "[" + str(idx) + "], NULL, NULL);")
             out.append("            if (fn == NULL) { Py_DECREF(m); return NULL; }")
@@ -551,6 +577,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            Py_DECREF(fn);")
             out.append("        }")
         for method_name, _gen in cls.get("methods", []):
+            if method_name in descriptors:
+                continue
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             out.append("        {")
             out.append("            PyObject *t = PyRun_String(cratix_tb_" + c_ident(cls["name"] + "." + method_name) + ", Py_file_input, cratix_globals, cratix_globals);")
@@ -575,6 +603,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("        }")
         # **跳板进命名空间** ✅（普通 Python 函数 ✅ → 作为方法时自动绑定 self ✅ ✅）
         for method_name, _gen in cls.get("methods", []):
+            if method_name in descriptors:
+                continue
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             decorators = (cls.get("method_decorators") or {}).get(method_name) or []
             out.append("        {")
@@ -632,6 +662,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        Py_DECREF(bases);")
         out.append("        Py_DECREF(ns);")
         out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+        # **原生方法描述符** ✅ —— 建类后挂上去 ✅（PyDescr_NewMethod 需要类对象 ✅）。
+        # 好处 ✅：调用时 `self` 由**描述符**绑定 ✅ -> 省掉 Python 跳板帧 ✅。
+        desc_index = 0
+        for method_name, _gen in cls.get("methods", []):
+            if method_name not in descriptors:
+                continue
+            out.append("        {")
+            out.append("            PyObject *cratix_d = PyDescr_NewMethod((PyTypeObject *)cls, &cratix_cls_" + c_ident(cls["name"]) + "_desc[" + str(desc_index) + "]);")
+            out.append("            if (cratix_d == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + method_name + q + ", cratix_d) < 0) { Py_DECREF(cratix_d); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(cratix_d);")
+            out.append("        }")
+            desc_index += 1
         # **类装饰器** ✅：建类之后按逆序应用 ✅（@a @b class C -> a(b(C)) ✅）
         for segment in reversed(cls.get("decorators") or []):
             out.append("        {")
@@ -756,8 +799,10 @@ class FunctionGen:
     """生成一个函数的 C 代码 ✅。"""
 
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
-                 class_methods=None, self_attr_writes=None):
+                 class_methods=None, self_attr_writes=None, method_mode=False):
         self.func_name = func_name
+        # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
+        self.method_mode = bool(method_mode)
         # **直调优化** ✅：本类已 AOT 的方法（名字 -> C 函数名 ✅）与"被赋过值的 self 属性" ✅。
         # 只有**没被 self.X = ... 覆盖**的方法才敢直调 ✅（否则会绕过实例属性 ✅ -> 语义偏差 ✅）。
         # **保持引用** ✅（不复制 ✅）—— 类方法是一个个生成的 ✅，
@@ -828,12 +873,16 @@ class FunctionGen:
         kwonly = list(params.get("kwonly", []))
         vararg = params.get("vararg")
         kwarg = params.get("kwarg")
+        # **方法描述符模式** ✅：self 从 C 的 `self` 拿 ✅ -> 位置参数整体左移一位 ✅
+        base = 1 if (self.method_mode and names and names[0] == "self") else 0
         n_pos = len(names)
 
         self.emit("/* --- 参数绑定 --- */")
         pass
         self.emit("PyObject *cratix_kw = NULL;")
         self.emit("PyObject *cratix_kwv = NULL;")
+        if base:
+            self.emit("PyObject *cratix_shifted = NULL;")
         # **空 kwargs 不复制** ✅ —— 类方法的跳板是 `def tb(self, *args, **kwargs)` ✅，
         # 调它时 kwargs 永远是个 dict ✅（哪怕是空 dict ✅）→ 每次都 PyDict_Copy ✅（一次真分配 ✅）。
         self.emit("if (kwargs != NULL && PyDict_GET_SIZE(kwargs) > 0) {")
@@ -841,11 +890,34 @@ class FunctionGen:
         self.emit("    if (cratix_kw == NULL) goto cratix_error;")
         self.emit("}")
 
+        if base:
+            # **self 从 C self 拿** ✅（描述符调用 ✅）；
+            # 兜底 ✅：`tp_new` 是 unbound 调用 ✅（self 在 args[0] ✅）-> 这里才复制一次 ✅。
+            var = self.local_var(names[0])
+            self.emit("/* self（方法描述符 ✅）*/")
+            self.emit("if (self != NULL) {")
+            self.emit("    " + var + " = self;")
+            self.emit("    Py_INCREF(" + var + ");")
+            self.emit("} else {")
+            self.emit("    if (PyTuple_GET_SIZE(args) < 1) {")
+            self.emit("        PyErr_SetString(PyExc_TypeError, \"cratix: missing self\");")
+            self.emit("        goto cratix_error;")
+            self.emit("    }")
+            self.emit("    " + var + " = PyTuple_GET_ITEM(args, 0);")
+            self.emit("    Py_INCREF(" + var + ");")
+            self.emit("    cratix_shifted = PyTuple_GetSlice(args, 1, PyTuple_GET_SIZE(args));")
+            self.emit("    if (cratix_shifted == NULL) goto cratix_error;")
+            self.emit("    args = cratix_shifted;")
+            self.emit("}")
+
         for i, name in enumerate(names):
+            if base and i == 0:
+                continue
             var = self.local_var(name)
+            offset = i - base
             self.emit("/* " + name + " */")
-            self.emit("if (" + str(i) + " < PyTuple_GET_SIZE(args)) {")
-            self.emit("    " + var + " = PyTuple_GET_ITEM(args, " + str(i) + ");")
+            self.emit("if (" + str(offset) + " < PyTuple_GET_SIZE(args)) {")
+            self.emit("    " + var + " = PyTuple_GET_ITEM(args, " + str(offset) + ");")
             self.emit("    Py_INCREF(" + var + ");")
             self.emit("} else {")
             self.emit("    cratix_kwv = cratix_kw ? PyDict_GetItemWithError(cratix_kw, cratix_key_" + c_ident(name) + ") : NULL;")
@@ -866,8 +938,8 @@ class FunctionGen:
         if vararg:
             var = self.local_var(vararg)
             self.emit("/* *" + vararg + " */")
-            self.emit("if (PyTuple_GET_SIZE(args) > " + str(n_pos) + ") {")
-            self.emit("    " + var + " = PyTuple_GetSlice(args, " + str(n_pos) + ", PyTuple_GET_SIZE(args));")
+            self.emit("if (PyTuple_GET_SIZE(args) > " + str(n_pos - base) + ") {")
+            self.emit("    " + var + " = PyTuple_GetSlice(args, " + str(n_pos - base) + ", PyTuple_GET_SIZE(args));")
             self.emit("    if (" + var + " == NULL) goto cratix_error;")
             self.emit("} else {")
             self.emit("    " + var + " = PyTuple_New(0);")
@@ -1757,14 +1829,13 @@ class FunctionGen:
         ):
             receiver = self.emit_expr(target.kids[0])
             arg_vals = [self.emit_expr(child) for child in positional]
+            # **方法描述符的原生函数** ✅ 只收"非 self"参数 ✅（self 走 C 的 self ✅）
             args_tuple = self.new_tmp()
-            self.emit(args_tuple + " = PyTuple_New(" + str(len(arg_vals) + 1) + ");")
+            self.emit(args_tuple + " = PyTuple_New(" + str(len(arg_vals)) + ");")
             self.emit("if (" + args_tuple + " == NULL) goto cratix_error;")
-            self.emit("Py_INCREF(" + receiver + ");")
-            self.emit("PyTuple_SET_ITEM(" + args_tuple + ", 0, " + receiver + ");")
             for index, value in enumerate(arg_vals):
                 self.emit("Py_INCREF(" + value + ");")
-                self.emit("PyTuple_SET_ITEM(" + args_tuple + ", " + str(index + 1) + ", " + value + ");")
+                self.emit("PyTuple_SET_ITEM(" + args_tuple + ", " + str(index) + ", " + value + ");")
             self.emit(t + " = " + direct + "(" + receiver + ", " + args_tuple + ", NULL);")
             self.emit("Py_DECREF(" + args_tuple + ");")
             self.emit(args_tuple + " = NULL;")

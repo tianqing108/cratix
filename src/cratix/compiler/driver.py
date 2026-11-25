@@ -146,7 +146,15 @@ def _text_signature(args: ast.arguments, module_level: bool = True) -> str:
     parts = []
     if module_level:
         parts.append("$module")
+    else:
+        # **方法** ✅：`$self` 是 CPython 的"这是绑定方法"标记 ✅ ——
+        # 有它 inspect.signature(实例.方法) 才会把 self 去掉 ✅。
+        parts.append("$self")
     positional = list(getattr(args, "posonlyargs", [])) + list(args.args)
+    if not module_level and positional:
+        # AST 里 self 是普通参数 ✅ -> 签名里由 `$self` 代表 ✅，这里跳过它 ✅
+        # self 永远没有默认值 ✅ -> 只丢位置参数即可 ✅（defaults 保持右对齐 ✅）
+        positional = positional[1:]
     defaults = list(args.defaults)
     pad = len(positional) - len(defaults)
     for index, arg in enumerate(positional):
@@ -348,9 +356,15 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         and target.value.id == "self"
                     ):
                         self_attr_writes.add(target.attr)
+        # **哪些方法可以做成原生方法描述符** ✅：无装饰器的 ✅（装饰器要的是"可调用对象" ✅）
+        descriptor_methods = [
+            entry.name for entry in stmt.body
+            if isinstance(entry, ast.FunctionDef) and not entry.decorator_list
+        ]
         class_info = {
             "name": stmt.name,
             "doc": _doc_of(stmt),
+            "descriptor_methods": [],
             "methods": [],
             "attrs": [],
             # **类装饰器** ✅（建类之后按**逆序**应用 ✅ —— 与 CPython 一致 ✅）
@@ -381,6 +395,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         consts,
                         class_methods=generated_methods,
                         self_attr_writes=self_attr_writes,
+                        method_mode=item.name in set(descriptor_methods),
                     )
                     gen.emit_binding()
                     for body_stmt in built.get("body", []):
@@ -399,11 +414,17 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
                 class_info["methods"].append((item.name, gen))
                 # **生成成功后**才登记 ✅（后面生成的兄弟方法可以直调它 ✅）
-                generated_methods[item.name] = "cratix_fn_" + codegen.c_ident(stmt.name + "." + item.name)
+                # **只登记描述符方法** ✅ —— 跳板方法（带装饰器）的参数里含 self ✅，
+                # 直调会少传一个参数 ✅（所以它们一律不直调 ✅）。
+                if item.name in set(descriptor_methods):
+                    class_info["descriptor_methods"].append(item.name)
+                    generated_methods[item.name] = "cratix_fn_" + codegen.c_ident(stmt.name + "." + item.name)
                 result.genexp_sources.update(gen.genexp_sources)
                 # **方法元数据** ✅：doc + 类名限定的 qualname ✅
                 result.func_meta[stmt.name + "." + item.name] = {
                     "doc": _doc_of(item),
+                    # **方法签名** ✅：`$self` 标记 ✅ -> inspect.signature(实例.方法) 会把 self 去掉 ✅
+                    "sig": _text_signature(item.args, module_level=False),
                     "qualname": stmt.name + "." + item.name,
                     "cls": stmt.name,
                 }
