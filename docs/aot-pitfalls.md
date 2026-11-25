@@ -153,6 +153,27 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **追加发现** ✅：工厂路径里 `Py_DECREF(args)` 之后**忘了置 NULL** ✅ ->
 函数出口的清理**又 DECREF 一次** ✅ -> 双重释放 ✅（已修 ✅，但**不是**析构崩溃的唯一原因 ✅）。
 
+## 追加：#131 冻结 exe 的**写文件**路径 ✅（读没问题 ✅）
+
+用 `build/probe_frozen.py`（建一次 ✅ 然后用不同数据反复跑 exe ✅）把范围压到了**一条** ✅：
+
+| 场景 | 结果 |
+| --- | --- |
+| 无数据文件 `stats` ✅ | OK ✅ |
+| 空文件 `stats` ✅ | OK ✅ |
+| 空数组 `stats` ✅ | OK ✅ |
+| **一条数据** `stats` / `list` ✅ | OK ✅（**读完全正常** ✅） |
+| **`add`（写文件）** ✅ | **0xC0000005 @ python314.dll** ✅ |
+
+**已看到的线索** ✅（`CRATIX_DEBUG=1` ✅）：崩溃前最后一条 VFS 日志是
+`GFIBN entry(e.json) cls=3 size=104` ✅ —— 目标文件被当成**包内条目**了 ✅，
+而 `vfs_CreateFileW` 对"包内条目 + 写访问"是**直接 ACCESS_DENIED**（不该崩）✅。
+-> 嫌疑：写路径上还有**别的**入口（`GetFileInformationByHandle` / CRT 重定向 ✅）
+把它们当伪句柄处理 ✅。
+
+**为什么进程内测不出来** ✅：进程内根本不经过 stub / VFS ✅ ——
+所以这类 bug **只有跑真 exe 才看得见** ✅（这就是 `probe_frozen.py` 存在的理由 ✅）。
+
 ## 追加：真实应用一上来就踩中的两个缺口 ✅
 
 写 `examples/notes`（真实一点的小应用 ✅）时暴露的 ✅：

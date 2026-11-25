@@ -744,8 +744,12 @@ f-string ✅ / 生成器表达式 ✅ / JSON ✅ / 文件 ✅ / 子命令 ✅ / 
    `if category not in CATEGORIES` 立刻炸出来 ✅。链式比较里 `failed` 的含义是
    "这一条**不成立**" ✅，而 `in` 的极性写反了 ✅。已修 ✅ + 新增语料 `corpus_membership` ✅。
 
-**待修** ⬜：#131 ✅（打包后的 exe 里 `add` 写文件时崩 ✅ —— 进程内同样代码正常 ✅，
-说明与 **stub / VFS 写路径**有关 ✅）。
+**待修** ⬜：#131 ✅（打包后的 exe 里 `add` 写文件时崩 ✅ —— 进程内同样代码正常 ✅）。
+
+**#131 已把范围压到一条** ✅（`build/probe_frozen.py` ✅）：
+**读全部正常** ✅（无文件 ✅ / 空文件 ✅ / 空数组 ✅ / 一条数据 ✅）—— **只有写崩** ✅。
+崩溃前最后一条 VFS 日志 ✅：`GFIBN entry(e.json) cls=3 size=104` ✅ 目标被当成**包内条目** ✅。
+下一步 ✅：查写路径上的 `GetFileInformationByHandle` / CRT 重定向 ✅ 有没有把**真句柄**当伪句柄 ✅。
 
 **可复现基线更新** ✅：stub 改了（argv ✅）-> 打包产物字节变了 ✅ ——
 `examples/hello` 的 sha256 从 `e2c06f81…` 变成 **`a29107a3…`** ✅。
