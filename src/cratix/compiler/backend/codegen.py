@@ -1545,6 +1545,21 @@ class FunctionGen:
             self.emit(val + " = -" + inner_val + ";")
             self.emit("if (" + inner_val + " == (-9223372036854775807LL - 1)) " + ok + " = 0;")
             return ok, val
+        if kind == "binop" and node.get("op") == "*":
+            # **乘法溢出回验** ✅：算完用 `r / b == a` 反查 ✅
+            # （`b == -1` 那一支单独判 ✅ —— `LLONG_MIN / -1` 在 C 里是 UB ✅）。
+            left_ok, left_val = self.emit_int_value(node.kids[0])
+            right_ok, right_val = self.emit_int_value(node.kids[1])
+            self.emit("if (" + left_ok + " && " + right_ok + ") {")
+            self.emit("    " + val + " = " + left_val + " * " + right_val + ";")
+            self.emit("    " + ok + " = 1;")
+            self.emit("    if (" + left_val + " != 0 && " + right_val + " != 0) {")
+            self.emit("        if (" + right_val + " == -1) {")
+            self.emit("            if (" + left_val + " == (-9223372036854775807LL - 1)) " + ok + " = 0;")
+            self.emit("        } else if (" + val + " / " + right_val + " != " + left_val + ") " + ok + " = 0;")
+            self.emit("    }")
+            self.emit("} else { " + ok + " = 0; }")
+            return ok, val
         if kind == "binop" and node.get("op") in ("+", "-"):
             left_ok, left_val = self.emit_int_value(node.kids[0])
             right_ok, right_val = self.emit_int_value(node.kids[1])
