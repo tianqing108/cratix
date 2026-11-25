@@ -57,6 +57,8 @@ class ModuleCompile:
     genexp_sources: dict = field(default_factory=dict)
     # **模块级装饰器** ✅（(名字, [装饰器表达式...]) ✅）
     decorated_functions: list = field(default_factory=list)
+    # **源码路径** ✅（`__file__` 保真用 ✅ —— 编译期就知道 ✅）
+    source_path: str = ""
 
     @property
     def supported_names(self) -> list:
@@ -276,7 +278,11 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     module_name = module_name or path.stem
-    result = ModuleCompile(module_name=module_name, init_symbol=init_symbol_for(module_name))
+    result = ModuleCompile(
+        module_name=module_name,
+        init_symbol=init_symbol_for(module_name),
+        source_path=str(path),
+    )
 
     # --- 模块级语句 ✅ ---
     module_stmts = []
@@ -804,7 +810,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             func_meta=module_compile.func_meta,
             genexps=module_compile.genexp_sources,
             decorated_functions=module_compile.decorated_functions,
-            source_file=str(path),
+            source_file=module_compile.source_path,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

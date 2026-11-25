@@ -14,6 +14,8 @@ v1 **不支持** try/except/finally 与 with ✅（需要 C 级异常展开 ✅ 
 
 from __future__ import annotations
 
+import ast
+
 from ..frontend.subset import Unsupported
 
 
@@ -154,23 +156,30 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+class _CellRewriter(ast.NodeTransformer):
+    """把**捕获的名字**改写成 `_cratix_cells["名字"]` ✅。
+
+    **放在模块级** ✅ —— 以前写在函数里（嵌套 class ✅）会让那个函数整函数回退 ✅。
+    """
+
+    def __init__(self, captured):
+        self.captured = set(captured)
+
+    def visit_Name(self, node):
+        if node.id in self.captured and isinstance(node.ctx, ast.Load):
+            return ast.Subscript(
+                value=ast.Name(id="_cratix_cells", ctx=ast.Load()),
+                slice=ast.Constant(value=node.id),
+                ctx=ast.Load(),
+            )
+        return node
+
+
 def _rewrite_cells(expr_src: str, captured) -> str:
     """把**捕获的名字**改写成 `_cratix_cells["名字"]` ✅（保语义 ✅ 晚绑定 ✅）。"""
-    import ast as _ast
-
-    tree = _ast.parse(expr_src, mode="eval")
-
-    class _Rewrite(_ast.NodeTransformer):
-        def visit_Name(self, node):
-            if node.id in captured and isinstance(node.ctx, _ast.Load):
-                return _ast.Subscript(
-                    value=_ast.Name(id="_cratix_cells", ctx=_ast.Load()),
-                    slice=_ast.Constant(value=node.id),
-                    ctx=_ast.Load(),
-                )
-            return node
-
-    return _ast.unparse(_ast.fix_missing_locations(_Rewrite().visit(tree)))
+    tree = ast.parse(expr_src, mode="eval")
+    rewritten = _CellRewriter(captured).visit(tree)
+    return ast.unparse(ast.fix_missing_locations(rewritten))
 
 
 def genexp_source(name: str, elt_src: str, gen_texts, captured=None) -> str:
@@ -869,7 +878,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     return nl.join(out) + nl
 
 def generate_module(module_name: str, init_symbol: str, functions: list, key_names: list,
-                    module_gen=None, alias_init: str | None = None, func_meta=None) -> str:
+                    module_gen=None, alias_init: str | None = None, func_meta=None,
+                    classes=None, consts=None) -> str:
     """生成整个模块的 C 代码 ✅（多阶段初始化 ✅ —— 与 stub 的加载桥契合 ✅）。"""
     nl = chr(10)
     q = chr(34)
@@ -2283,6 +2293,50 @@ class FunctionGen:
         self.emit(t + " = " + cur + ";")
         self.emit(cur + " = NULL;")
 
+    def emit_builtin_method_fast(self, node, t) -> bool:
+        """**内建类型的常见方法直译** ✅ —— 省掉属性查找 + 绑定方法 ✅。
+
+        只在**类型精确匹配**时才走快路径 ✅（否则退回通用 VectorcallMethod ✅ —— 永远安全 ✅）。
+        """
+        target = node.kids[0]
+        if target.kind != "attr" or node.get("keywords"):
+            return False
+        attr = target.get("attr")
+        positional = node.kids[1:]
+        receiver = target.kids[0]
+        if attr == "append" and len(positional) == 1:
+            self.emit_attr_name(target)
+            obj = self.emit_expr(receiver)
+            value = self.emit_expr(positional[0])
+            self.emit("if (PyList_CheckExact(" + obj + ")) {")
+            self.emit("    if (PyList_Append(" + obj + ", " + value + ") < 0) goto cratix_error;")
+            self.emit("    " + t + " = Py_NewRef(Py_None);")
+            self.emit("} else {")
+            self.emit("    PyObject *cratix_am = PyObject_GetAttr(" + obj + ", " + self.attr_ref(target) + ");")
+            self.emit("    if (cratix_am == NULL) goto cratix_error;")
+            self.emit("    " + t + " = PyObject_CallOneArg(cratix_am, " + value + ");")
+            self.emit("    Py_DECREF(cratix_am);")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("}")
+            return True
+        if attr == "get" and len(positional) == 1:
+            self.emit_attr_name(target)
+            obj = self.emit_expr(receiver)
+            key = self.emit_expr(positional[0])
+            self.emit("if (PyDict_CheckExact(" + obj + ")) {")
+            self.emit("    " + t + " = PyDict_GetItemWithError(" + obj + ", " + key + ");")
+            self.emit("    if (" + t + " == NULL && PyErr_Occurred()) goto cratix_error;")
+            self.emit("    if (" + t + " == NULL) { " + t + " = Py_NewRef(Py_None); } else { Py_INCREF(" + t + "); }")
+            self.emit("} else {")
+            self.emit("    PyObject *cratix_gm = PyObject_GetAttr(" + obj + ", " + self.attr_ref(target) + ");")
+            self.emit("    if (cratix_gm == NULL) goto cratix_error;")
+            self.emit("    " + t + " = PyObject_CallOneArg(cratix_gm, " + key + ");")
+            self.emit("    Py_DECREF(cratix_gm);")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("}")
+            return True
+        return False
+
     def emit_method_call(self, node, t) -> bool:
         """方法调用 ✅ —— 走 `PyObject_VectorcallMethod` ✅。
 
@@ -2307,6 +2361,9 @@ class FunctionGen:
         n = n_pos + n_kw
         if n + 1 > MAX_VECTORCALL_ARGS:
             return False
+        # **内建类型的常见方法** ✅（list.append / dict.get ✅ —— 类型对得上才走快路径 ✅）
+        if self.emit_builtin_method_fast(node, t):
+            return True
         # **直调本类方法** ✅ —— `self.foo(...)` ✅、foo 已 AOT ✅、且没被实例属性覆盖 ✅、无关键字/解包 ✅
         direct = self.class_methods.get(target.get("attr"))
         if (

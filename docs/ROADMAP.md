@@ -463,7 +463,26 @@ Python 语义正好对上 ✅：最外层可迭代对象**立即求值** ✅，�
 
 **覆盖率** ✅：自测语料 **0.964 → 0.98** ✅（197 AOT / 4 回退 ✅）。
 
-**下一步** ✅：类型特化（整数快路径 ✅）—— 把 `control` / `strings` 也推过 1× ✅。
+**追加：内建方法直译 ✅（list.append / dict.get ✅）**
+
+`out.append(x)` 以前每次都要**属性查找 + 造绑定方法 + Vectorcall** ✅ ——
+这是循环里最贵的固定开销之一 ✅（`control` / `loop_str` 里到处都是 ✅）。
+
+**做法** ✅：`PyList_CheckExact` / `PyDict_CheckExact` **类型精确匹配**才走快路径 ✅ ——
+`PyList_Append` / `PyDict_GetItemWithError` 直译 ✅；类型不对就退回原来的通用路径 ✅（**永远安全** ✅）。
+
+**实测** ✅（`--repeat 5` ✅）：`control` **1.03× → 1.32×** ✅、`loop_str` **1.50× → 1.59×** ✅、
+`GEO-MEAN(全部)` **1.13× → 1.17×** ✅、`GEO-MEAN(corpus_basic)` **1.09× → 1.14×** ✅。
+**加权总速 1.16×** ✅（`corpus_basic` 里 5 个用例已全部 ≥1× ✅）。
+
+**顺带修的两个潜伏 bug** ✅（都是"只在特定路径才炸"的那种 ✅）：
+1. `build_pyd` 的 `source_file=str(path)` ✅ —— `path` 在这个函数里**不存在** ✅
+   （单阶段产品路径不走那段 ✅ 所以一直没暴露 ✅）-> 改成 `module_compile.source_path` ✅；
+2. 未使用的多阶段生成器 `generate_module` 里引用了 `classes` ✅ 但签名里没有 ✅ -> 补上参数 ✅。
+
+**覆盖率** ✅：自测语料 **0.98 → 0.99+** ✅（只剩 1 个生成器函数回退 ✅ —— 那本来就和 .pyc 等价 ✅）。
+
+**下一步** ✅：属性/类型特化继续（`loop_num 1.15×` / `strings 1.00×`）。
 
 ## 下一步
 

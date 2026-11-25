@@ -142,6 +142,13 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：内建方法直译 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 86 | `out.append(x)` / `d.get(k)` 在循环里很贵 ✅（`control` 只有 1.03× ✅） | 每次都**属性查找 + 造绑定方法 + Vectorcall** ✅ | 类型**精确匹配**才直译 ✅（`PyList_CheckExact` -> `PyList_Append` ✅、`PyDict_CheckExact` -> `PyDict_GetItemWithError` ✅），不匹配退回通用路径 ✅ -> control 1.32× ✅ |
+| 87 | 快路径生成的 C 报 `cratix_an_v_append` 未声明 ✅ | 用了 `attr_ref` 却没先 `emit_attr_name` ✅（那条惰性声明没发出来 ✅） | 快路径开头先 `emit_attr_name(target)` ✅ |
+
 ## 追加：生成器表达式捕获 ✅
 
 | # | 现象 | 根因 | 修法 |
