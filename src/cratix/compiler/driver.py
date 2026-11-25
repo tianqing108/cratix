@@ -18,7 +18,7 @@ from pathlib import Path
 from . import builder
 from .backend import codegen
 from .backend.runtime import HEADER_NAME, RUNTIME_H
-from .frontend.scope import Scope, analyze_function
+from .frontend.scope import Scope, analyze_function, module_bindings
 from .frontend.subset import Unsupported, check_class, check_function
 
 # 编译器版本 ✅ —— 改动编译器时 ✅ 指纹要变 ✅（否则会复用旧产物 ✅ ✅）。
@@ -158,22 +158,8 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
         module_stmts.append(stmt)
 
     # --- 模块级绑定的名字 ✅（= 函数里的模块全局 ✅）---
-    module_globals: set = set()
-    for stmt in tree.body:
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    module_globals.add(target.id)
-        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-            module_globals.add(stmt.target.id)
-        elif isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                module_globals.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(stmt, ast.ImportFrom):
-            for alias in stmt.names:
-                module_globals.add(alias.asname or alias.name)
-        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            module_globals.add(stmt.name)
+    # **与黄金模型共用同一实现** ✅ —— 否则两边判定会漂移 ✅ ✅
+    module_globals = module_bindings(tree)
 
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []

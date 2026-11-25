@@ -23,6 +23,8 @@ MAX_VECTORCALL_ARGS = 16
 # try/except 的实现上限 ✅（嵌套深度 ✅ / 每层 handler 数 ✅）。
 MAX_TRY_DEPTH = 8
 MAX_TRY_HANDLERS = 4
+# **with 帧的编号基址** ✅（>= 该值即 with 帧 ✅ —— 与 try 帧区分 ✅）。
+WITH_FRAME_BASE = 1000
 
 
 def c_ident(name: str) -> str:
@@ -144,6 +146,11 @@ def generate_function(gen: FunctionGen) -> str:
     decls.append("    int cratix_try_n = 0;")
     decls.append("    int cratix_try_idx[" + str(MAX_TRY_DEPTH) + "];")
     decls.append("    PyObject *cratix_try_types[" + str(MAX_TRY_DEPTH) + "][" + str(MAX_TRY_HANDLERS) + "];")
+    decls.append("    int cratix_try_nh[" + str(MAX_TRY_DEPTH) + "];")
+    decls.append("    PyObject *cratix_with_mgr[" + str(MAX_TRY_DEPTH) + "] = { NULL };")
+    # **interned 属性名** ✅ —— 必须声明在函数顶部 ✅（块内声明在别的分支不可见 ✅ ✅）
+    for ref in sorted(gen.declared_attrs):
+        decls.append("    static PyObject *" + ref + " = NULL;")
     cleanup = []
     # **cratix_kwv 是借用引用** ✅（PyDict_GetItemWithError ✅）—— **不能 DECREF** ✅
     # （多 DECREF 一次 ✅ → 提前释放 ✅ → 后续 use-after-free ✅ → 访问违例 ✅）
@@ -160,10 +167,13 @@ def generate_function(gen: FunctionGen) -> str:
     lines.extend(decls)
     lines.append(body)
     lines.append("    result = Py_NewRef(Py_None);")
-    lines.append("    goto cratix_done;")
+    lines.append("    goto cratix_unwind;")
     lines.append("cratix_error:")
     lines.extend(gen.emit_try_handlers())
     lines.append("    result = NULL;")
+    lines.append("    goto cratix_done;")
+    lines.append("cratix_unwind:")
+    lines.extend(gen.emit_unwind_code())
     lines.append("cratix_done:")
     lines.extend(cleanup)
     lines.append("    return result;")
@@ -188,6 +198,10 @@ def module_body_parts(gen: FunctionGen):
     decls.append("    int cratix_try_n = 0;")
     decls.append("    int cratix_try_idx[" + str(MAX_TRY_DEPTH) + "];")
     decls.append("    PyObject *cratix_try_types[" + str(MAX_TRY_DEPTH) + "][" + str(MAX_TRY_HANDLERS) + "];")
+    decls.append("    int cratix_try_nh[" + str(MAX_TRY_DEPTH) + "];")
+    decls.append("    PyObject *cratix_with_mgr[" + str(MAX_TRY_DEPTH) + "] = { NULL };")
+    for ref in sorted(gen.declared_attrs):
+        decls.append("    static PyObject *" + ref + " = NULL;")
     cleanup = []
     for name in gen.helper_names:
         cleanup.append("    Py_XDECREF(" + name + ");")
@@ -567,6 +581,9 @@ class FunctionGen:
         self.int_helpers: list[str] = []
         self.declared_attrs: set = set()
         self.try_blocks: list = []
+        self.with_blocks: list = []
+        self.loop_stack: list = []
+        self.loop_index = 0
         self.label_index = 0
 
     # ---------- 基础设施 ----------
@@ -699,7 +716,8 @@ class FunctionGen:
         if ref in self.declared_attrs:
             return
         self.declared_attrs.add(ref)
-        self.emit("static PyObject *" + ref + " = NULL;")
+        # **声明必须在函数顶部** ✅ —— 写在块里 ✅ 别的分支就看不见 ✅ ✅
+        # （实测：then 分支首次用到 ✅ -> 声明落在 then 里 ✅ -> else 分支编译报未声明 ✅ ✅）
         self.emit("if (" + ref + " == NULL) {")
         self.emit("    " + ref + " = PyUnicode_InternFromString(" + c_string(target_attr(node)) + ");")
         self.emit("    if (" + ref + " == NULL) goto cratix_error;")
@@ -735,18 +753,30 @@ class FunctionGen:
             self.lines = saved
         self.try_blocks.append({"handlers": handlers, "bodies": handler_bodies})
         self.emit("{")
+        self.emit("    if (cratix_try_n >= " + str(MAX_TRY_DEPTH) + ") {")
+        self.emit("        PyErr_SetString(PyExc_RuntimeError, \"cratix: try/with nesting too deep\");")
+        self.emit("        goto cratix_error;")
+        self.emit("    }")
         self.emit("    int cratix_ti = cratix_try_n++;")
         self.emit("    cratix_try_idx[cratix_ti] = " + str(try_id) + ";")
+        self.emit("    cratix_try_nh[cratix_ti] = " + str(len(handlers)) + ";")
         for j, handler in enumerate(handlers):
             htype = handler.get("type")
             if htype is None:
+                # **借用引用** ✅ -> 自己拿一份 ✅（弹栈时要 DECREF ✅ ✅）
+                self.emit("    Py_INCREF(PyExc_Exception);")
                 self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = PyExc_Exception;")
             else:
                 hv = self.emit_expr(htype)
+                # **所有权转移给帧** ✅ -> 临时变量置 NULL ✅（否则二次释放 ✅ ✅）
                 self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = " + hv + ";")
+                self.emit("    " + hv + " = NULL;")
         for stmt in node.get("body", []):
             self.emit_stmt(stmt)
         self.emit("    cratix_try_n--;")
+        for j in range(len(handlers)):
+            self.emit("    Py_XDECREF(cratix_try_types[cratix_ti][" + str(j) + "]);")
+            self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = NULL;")
         self.emit("    goto cratix_try_end_" + str(try_id) + ";")
         self.emit("}")
         # **结束标签** ✅ —— handler 跑完后跳到这里 ✅（继续执行 ✅ ✅）
@@ -758,7 +788,7 @@ class FunctionGen:
         **必须返回行列表** ✅ —— 直接 self.emit ✅ 会追加到 gen.lines ✅，
         而函数体早已 join ✅ ✅ → 分派代码会**丢失** ✅ ✅（实测 ✅）。
         """
-        if not self.try_blocks:
+        if not self.try_blocks and not self.with_blocks:
             return []
         start = len(self.lines)
         self.emit("    if (cratix_try_n > 0) {")
@@ -774,32 +804,72 @@ class FunctionGen:
             self.emit("                for (int j = 0; j < " + str(len(handlers)) + "; j++) {")
             self.emit("                    if (cratix_try_types[cratix_ti][j] != NULL && PyErr_GivenExceptionMatches(cratix_ev, cratix_try_types[cratix_ti][j])) { cratix_m = j; break; }")
             self.emit("                }")
-            self.emit("                if (cratix_m >= 0) {")
+            self.emit("                if (cratix_m < 0) {")
+            self.emit("                    goto cratix_no_match;")
+            self.emit("                }")
+            # **命中** ✅ -> 先弹栈 ✅ + 释放类型 ✅（原来漏了 ✅ -> 栈越积越多 ✅ ✅）
+            self.emit("                cratix_try_n--;")
+            for j in range(len(handlers)):
+                self.emit("                Py_XDECREF(cratix_try_types[cratix_ti][" + str(j) + "]);")
+                self.emit("                cratix_try_types[cratix_ti][" + str(j) + "] = NULL;")
             for j, handler in enumerate(handlers):
                 name = handler.get("name")
                 if name:
-                    self.emit("                    if (cratix_m == " + str(j) + ") {")
-                    self.emit("                        PyObject *cratix_hv = cratix_ev;")
-                    self.emit("                        Py_INCREF(cratix_hv);")
-                    self.emit("                        " + self.local_var(name) + " = cratix_hv;")
-                    self.emit("                    }")
-            for j, handler in enumerate(handlers):
+                    self.emit("                if (cratix_m == " + str(j) + ") {")
+                    self.emit("                    Py_INCREF(cratix_ev);")
+                    self.emit("                    " + self.local_var(name) + " = cratix_ev;")
+                    self.emit("                }")
+            # **释放三元组** ✅（名字已 INCREF ✅ 不会悬空 ✅）
+            self.emit("                Py_XDECREF(cratix_et); Py_XDECREF(cratix_ev); Py_XDECREF(cratix_etb);")
+            self.emit("                cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            for j in range(len(handlers)):
                 self.emit("                if (cratix_m == " + str(j) + ") {")
                 for line in block["bodies"][j]:
                     self.emit(line)
                 self.emit("                    goto cratix_try_end_" + str(try_id) + ";")
                 self.emit("                }")
+            self.emit("                break;")
+            self.emit("            }")
+        for wid in self.with_blocks:
+            self.emit("            case " + str(wid) + ": {")
+            self.emit("                if (cratix_with_mgr[cratix_ti] == NULL) { goto cratix_no_match; }")
+            # **NULL 不能直接传给 Py_BuildValue** ✅ —— traceback 常常是 NULL ✅
+            # （实测：SystemError: NULL object passed to Py_BuildValue ✅）
+            self.emit("                PyObject *cratix_ea = cratix_et != NULL ? cratix_et : Py_None;")
+            self.emit("                PyObject *cratix_eb = cratix_ev != NULL ? cratix_ev : Py_None;")
+            self.emit("                PyObject *cratix_ec = cratix_etb != NULL ? cratix_etb : Py_None;")
+            self.emit("                PyObject *cratix_wr = PyObject_CallMethod(cratix_with_mgr[cratix_ti], \"__exit__\", \"OOO\", cratix_ea, cratix_eb, cratix_ec);")
+            self.emit("                cratix_try_n--;")
+            self.emit("                if (cratix_wr == NULL) {")
+            self.emit("                    Py_XDECREF(cratix_et); Py_XDECREF(cratix_ev); Py_XDECREF(cratix_etb);")
+            self.emit("                    cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            self.emit("                    goto cratix_error;")
             self.emit("                }")
+            self.emit("                cratix_m = PyObject_IsTrue(cratix_wr);")
+            self.emit("                Py_DECREF(cratix_wr);")
+            self.emit("                if (cratix_m < 0) {")
+            self.emit("                    Py_XDECREF(cratix_et); Py_XDECREF(cratix_ev); Py_XDECREF(cratix_etb);")
+            self.emit("                    cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            self.emit("                    goto cratix_error;")
+            self.emit("                }")
+            self.emit("                if (cratix_m > 0) {")
+            self.emit("                    Py_XDECREF(cratix_et); Py_XDECREF(cratix_ev); Py_XDECREF(cratix_etb);")
+            self.emit("                    cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            self.emit("                    goto cratix_with_end_" + str(wid) + ";")
+            self.emit("                }")
+            # **不抑制** ✅ -> 帧已弹 ✅ -> 直接把异常交给外层 ✅
+            # （原来走 cratix_no_match ✅ -> 又弹一次 ✅ -> 把外层 try 帧也弹掉了 ✅ ✅）
+            self.emit("                PyErr_Restore(cratix_et, cratix_ev, cratix_etb);")
+            self.emit("                cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+            self.emit("                goto cratix_error;")
             self.emit("                break;")
             self.emit("            }")
         self.emit("        }")
-        self.emit("        if (cratix_m < 0) {")
-        self.emit("            cratix_try_n--;")
-        self.emit("            PyErr_Restore(cratix_et, cratix_ev, cratix_etb);")
-        self.emit("            goto cratix_error;")
-        self.emit("        }")
-        self.emit("        Py_XDECREF(cratix_et);")
-        self.emit("        Py_XDECREF(cratix_etb);")
+        self.emit("cratix_no_match:")
+        self.emit("        cratix_try_n--;")
+        self.emit("        PyErr_Restore(cratix_et, cratix_ev, cratix_etb);")
+        self.emit("        cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
+        self.emit("        goto cratix_error;")
         self.emit("    }")
         return self.lines[start:]
 
@@ -857,6 +927,134 @@ class FunctionGen:
         self.emit("Py_DECREF(" + seq + ");")
         self.emit(seq + " = NULL;")
 
+    # ---------- 循环 ✅ ----------
+    def begin_loop(self):
+        """开一个循环 ✅ —— 记录**栈深度** ✅ 与 **break 标志** ✅。
+
+        - 深度 ✅：break / continue 时要退掉循环里压的 with 帧 ✅；
+        - break 标志 ✅：Python 的 `for ... else` ✅ 只在**没有 break** 时跑 else ✅ ✅。
+        """
+        idx = self.loop_index
+        self.loop_index += 1
+        depth_var = "cratix_ldepth_" + str(idx)
+        broke_var = "cratix_lbroke_" + str(idx)
+        self.emit("{")
+        self.emit("    int " + depth_var + " = cratix_try_n;")
+        self.emit("    int " + broke_var + " = 0;")
+        self.loop_stack.append({"depth": depth_var, "broke": broke_var})
+        return depth_var, broke_var
+
+    def end_loop(self, broke_var, orelse) -> None:
+        """收尾循环 ✅ —— else 分支只在**没有 break** 时执行 ✅（CPython 语义 ✅）。"""
+        self.loop_stack.pop()
+        if orelse:
+            self.emit("    if (!" + broke_var + ") {")
+            for stmt in orelse:
+                self.emit_stmt(stmt)
+            self.emit("    }")
+        self.emit("}")
+
+    def emit_unwind_to(self, depth_var: str) -> None:
+        """退栈到指定深度 ✅（break / continue ✅ —— 只跑 with 的 __exit__ ✅ 不跑 handler ✅）。"""
+        self.emit("while (cratix_try_n > " + depth_var + ") {")
+        self.emit("    int cratix_ui = cratix_try_n - 1;")
+        self.emit("    int cratix_uk = cratix_try_idx[cratix_ui];")
+        self.emit("    cratix_try_n--;")
+        self.emit("    if (cratix_uk >= " + str(WITH_FRAME_BASE) + ") {")
+        # **cratix_with_mgr 是借用引用** ✅（所有权在 mgr 临时变量 ✅ -> 出口统一 DECREF ✅）
+        self.emit("        if (cratix_with_mgr[cratix_ui] != NULL) {")
+        self.emit("            PyObject *cratix_ur = PyObject_CallMethod(cratix_with_mgr[cratix_ui], \"__exit__\", \"OOO\", Py_None, Py_None, Py_None);")
+        self.emit("            if (cratix_ur == NULL) { result = NULL; goto cratix_error; }")
+        self.emit("            Py_DECREF(cratix_ur);")
+        self.emit("        }")
+        self.emit("    }")
+        self.emit("}")
+
+    def emit_unwind_code(self) -> list:
+        """**退栈段** ✅（return ✅ —— 把所有 with 帧的 __exit__ 跑完 ✅）。"""
+        return [
+            "    while (cratix_try_n > 0) {",
+            "        int cratix_ui = cratix_try_n - 1;",
+            "        int cratix_uk = cratix_try_idx[cratix_ui];",
+            "        cratix_try_n--;",
+            "        if (cratix_uk >= " + str(WITH_FRAME_BASE) + ") {",
+            "            if (cratix_with_mgr[cratix_ui] != NULL) {",
+            "                PyObject *cratix_ur = PyObject_CallMethod(cratix_with_mgr[cratix_ui], \"__exit__\", \"OOO\", Py_None, Py_None, Py_None);",
+            "                if (cratix_ur == NULL) { result = NULL; goto cratix_error; }",
+            "                Py_DECREF(cratix_ur);",
+            "            }",
+            "        }",
+            "    }",
+        ]
+
+    # ---------- with ✅ ----------
+    def emit_with(self, node) -> None:
+        """with 语句 ✅ —— 走**帧栈** ✅（与 try 共用一套栈 ✅）。
+
+        机制 ✅：
+        - 进入 ✅：求值上下文 → 调 `__enter__` ✅ → 绑定目标 ✅；
+        - 压帧 ✅：帧类型 = with ✅（记录管理器对象 ✅）；
+        - 正常退出 ✅：调 `__exit__(None, None, None)` ✅（返回值忽略 ✅ —— 与 CPython 一致 ✅）；
+        - 异常退出 ✅：错误分派处 ✅ 调 `__exit__(异常三元组)` ✅
+          → 返回真 ✅ → **抑制异常** ✅ → 跳到 with 结束 ✅；
+          → 返回假 ✅ → **继续向外传播** ✅ ✅。
+        """
+        kids = list(node.kids)
+        if not kids or len(kids) % 2 != 0:
+            raise Unsupported("with 结构异常")
+        pairs = [(kids[i], kids[i + 1]) for i in range(0, len(kids), 2)]
+        self.emit_with_chain(pairs, 0, node.get("body", []))
+
+    def emit_with_chain(self, pairs, index: int, body) -> None:
+        """多上下文管理器 ✅ —— 嵌套 ✅（第一个在最外层 ✅ —— 与 CPython 一致 ✅）。"""
+        ctx, var = pairs[index]
+        mgr = self.new_helper()
+        enter = self.new_tmp()
+        src = self.emit_expr(ctx)
+        self.emit(mgr + " = " + src + ";")
+        self.emit(src + " = NULL;")
+        self.emit("if (" + mgr + " == NULL) goto cratix_error;")
+        self.emit(enter + " = PyObject_CallMethod(" + mgr + ", \"__enter__\", NULL);")
+        self.emit("if (" + enter + " == NULL) {")
+        self.emit("    Py_DECREF(" + mgr + ");")
+        self.emit("    " + mgr + " = NULL;")
+        self.emit("    goto cratix_error;")
+        self.emit("}")
+        if var is not None:
+            self.emit_assign(var, enter)  # 转移所有权 ✅
+        else:
+            self.emit("Py_DECREF(" + enter + ");")
+            self.emit(enter + " = NULL;")
+        wid = WITH_FRAME_BASE + len(self.with_blocks)
+        self.with_blocks.append(wid)
+        self.emit("{")
+        self.emit("    if (cratix_try_n >= " + str(MAX_TRY_DEPTH) + ") {")
+        self.emit("        PyErr_SetString(PyExc_RuntimeError, \"cratix: try/with nesting too deep\");")
+        self.emit("        goto cratix_error;")
+        self.emit("    }")
+        self.emit("    int cratix_ti = cratix_try_n++;")
+        self.emit("    cratix_try_idx[cratix_ti] = " + str(wid) + ";")
+        self.emit("    cratix_with_mgr[cratix_ti] = " + mgr + ";")
+        if index + 1 < len(pairs):
+            self.emit_with_chain(pairs, index + 1, body)
+        else:
+            for stmt in body:
+                self.emit_stmt(stmt)
+        self.emit("    cratix_try_n--;")
+        self.emit("    cratix_with_mgr[cratix_ti] = NULL;")
+        res = self.new_tmp()
+        self.emit("    " + res + " = PyObject_CallMethod(" + mgr + ", \"__exit__\", \"OOO\", Py_None, Py_None, Py_None);")
+        self.emit("    if (" + res + " == NULL) {")
+        self.emit("        Py_DECREF(" + mgr + ");")
+        self.emit("        " + mgr + " = NULL;")
+        self.emit("        goto cratix_error;")
+        self.emit("    }")
+        self.emit("    Py_DECREF(" + res + ");")
+        self.emit("    Py_DECREF(" + mgr + ");")
+        self.emit("    " + mgr + " = NULL;")
+        self.emit("}")
+        self.emit("cratix_with_end_" + str(wid) + ": ;")
+
     # ---------- 语句 ----------
     def emit_stmt(self, node) -> None:
         kind = node.kind
@@ -898,7 +1096,8 @@ class FunctionGen:
                 self.emit(t + " = NULL;")
             else:
                 self.emit("result = Py_NewRef(Py_None);")
-            self.emit("goto cratix_done;")
+            # **return 要先退栈** ✅ —— 里面的 with 必须跑 __exit__ ✅ ✅
+            self.emit("goto cratix_unwind;")
             return
         if kind == "if":
             test = self.emit_expr(node.kids[0])
@@ -911,16 +1110,17 @@ class FunctionGen:
             self.emit("}")
             return
         if kind == "while":
+            depth_var, broke_var = self.begin_loop()
             self.emit("while (1) {")
             test = self.emit_expr(node.kids[0])
             self.emit("    if (!cratix_truth(" + test + ")) break;")
             for stmt in node.get("body", []):
                 self.emit_stmt(stmt)
             self.emit("}")
-            for stmt in node.get("orelse", []):
-                self.emit_stmt(stmt)
+            self.end_loop(broke_var, node.get("orelse", []))
             return
         if kind == "for":
+            depth_var, broke_var = self.begin_loop()
             it = self.new_helper()
             iter_expr = self.emit_expr(node.kids[1])
             self.emit(it + " = PyObject_GetIter(" + iter_expr + ");")
@@ -938,13 +1138,21 @@ class FunctionGen:
             self.emit("}")
             self.emit("Py_DECREF(" + it + ");")
             self.emit(it + " = NULL;")
-            for stmt in node.get("orelse", []):
-                self.emit_stmt(stmt)
+            self.end_loop(broke_var, node.get("orelse", []))
             return
         if kind == "break":
+            if not self.loop_stack:
+                raise Unsupported("break 不在循环里")
+            frame = self.loop_stack[-1]
+            self.emit(frame["broke"] + " = 1;")
+            self.emit_unwind_to(frame["depth"])
             self.emit("break;")
             return
         if kind == "continue":
+            if not self.loop_stack:
+                raise Unsupported("continue 不在循环里")
+            frame = self.loop_stack[-1]
+            self.emit_unwind_to(frame["depth"])
             self.emit("continue;")
             return
         if kind == "pass":
@@ -1006,7 +1214,8 @@ class FunctionGen:
             self.emit_try(node)
             return
         if kind == "with":
-            raise Unsupported("with（异常路径语义未实现）")
+            self.emit_with(node)
+            return
         raise Unsupported("语句：" + kind)
     # ---------- 表达式 ----------
     def emit_fast_builtin(self, node, t) -> bool:

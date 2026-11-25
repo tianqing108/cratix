@@ -286,6 +286,7 @@ class Interpreter:
     def _exec_with(self, node, frame):
         kids = node.kids
         entered = []
+        error = None
         try:
             for i in range(0, len(kids), 2):
                 ctx = self.eval(kids[i], frame)
@@ -294,14 +295,25 @@ class Interpreter:
                 if kids[i + 1] is not None:
                     self.assign_to(kids[i + 1], value, frame)
             self.exec_block(node.get("body", []), frame)
-        except Exception as exc:
-            for ctx, _value, _var in reversed(entered):
-                if not ctx.__exit__(type(exc), exc, exc.__traceback__):
-                    raise
-            raise
-        else:
+        except (BaseException) as exc:  # noqa: BLE001 - 控制流也用异常表达 ✅
+            error = exc
+        # **控制流** ✅（return/break/continue ✅）—— 只跑 __exit__(None, None, None) ✅
+        control = isinstance(error, (_Return, _Break, _Continue))
+        if error is None or control:
             for ctx, _value, _var in reversed(entered):
                 ctx.__exit__(None, None, None)
+            if error is not None:
+                raise error
+            return
+        # **异常路径** ✅ —— 由内向外 ✅；一旦某层抑制 ✅ 外层按正常退出 ✅（CPython 语义 ✅）
+        suppressed = False
+        for ctx, _value, _var in reversed(entered):
+            if suppressed:
+                ctx.__exit__(None, None, None)
+            elif ctx.__exit__(type(error), error, error.__traceback__):
+                suppressed = True
+        if not suppressed:
+            raise error
 
     def _exec_classdef(self, node, frame):
         bases = tuple(self.eval(b, frame) for b in node.get("bases", []))

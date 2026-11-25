@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .. import builder
 from . import irvm
-from ..frontend.scope import analyze_function
+from ..frontend.scope import analyze_function, module_bindings
 from ..frontend.subset import Unsupported, check_function
 
 
@@ -45,7 +45,8 @@ def classify(tree: ast.Module, name: str) -> tuple[bool, str]:
     """判定函数能否 AOT ✅ —— 返回 (supported, reason ✅)。"""
     try:
         node = find_function(tree, name)
-        check_function(node, analyze_function(node))
+        # **必须传模块绑定** ✅ —— 否则模块级的类/常量会被当成闭包 ✅ ✅
+        check_function(node, analyze_function(node, module_bindings(tree)))
         return True, ""
     except Unsupported as exc:
         return False, exc.reason

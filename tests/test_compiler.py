@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -30,6 +31,15 @@ CASES = [
     ("corpus_exceptions.py", "chained", [(2,), (0,), (-1,)]),
     ("corpus_exceptions.py", "custom_raise", [("key",), ("value",), ("none",)]),
     ("corpus_exceptions.py", "assertive", [(3,), (-1,)]),
+    # with / for-else / while-else ✅
+    ("corpus_with.py", "pure_with", [(True,), (False,)]),
+    ("corpus_with.py", "pure_with_suppress", [()]),
+    ("corpus_with.py", "pure_with_propagate", [()]),
+    ("corpus_with.py", "pure_nested", [()]),
+    ("corpus_with.py", "loop_else_break", [()]),
+    ("corpus_with.py", "loop_else_no_break", [()]),
+    ("corpus_with.py", "while_else_break", [()]),
+    ("corpus_with.py", "while_else_no_break", [()]),
 ]
 
 
@@ -65,10 +75,11 @@ class GoldenModelTest(unittest.TestCase):
             self.assertTrue(reason, name + " 应当给出拒绝原因")
 
     def test_supported_are_accepted(self):
-        for filename in ("corpus_basic.py", "corpus_exceptions.py"):
+        for filename in ("corpus_basic.py", "corpus_exceptions.py", "corpus_with.py"):
             tree = diff.module_tree(CORPUS / filename)
             for stmt in tree.body:
-                if hasattr(stmt, "name") and hasattr(stmt, "body"):
+                # **只看函数** ✅ —— 类的成员不在 classify 的范围里 ✅ ✅
+                if isinstance(stmt, ast.FunctionDef):
                     supported, reason = diff.classify(tree, stmt.name)
                     self.assertTrue(supported, stmt.name + " 不应被拒绝：" + reason)
 

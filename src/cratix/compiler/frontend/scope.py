@@ -93,6 +93,32 @@ def _param_names(args: ast.arguments) -> list:
     return names
 
 
+def module_bindings(tree: ast.Module) -> set:
+    """模块级绑定的名字 ✅（= 函数里的"模块全局" ✅）。
+
+    **单一实现** ✅ —— 编译器与黄金模型共用 ✅。
+    （曾经两边各算一套 ✅ -> 黄金模型不认识模块级的类 ✅
+     -> 把 `Ctx` 当成闭包自由变量 ✅ -> 误判为不可 AOT ✅。）
+    """
+    names: set = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            names.add(stmt.target.id)
+        elif isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(stmt, ast.ImportFrom):
+            for alias in stmt.names:
+                names.add(alias.asname or alias.name)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(stmt.name)
+    return names
+
+
 def analyze_function(node: ast.FunctionDef, module_globals: set | None = None) -> Scope:
     """分析一个函数的局部 / 全局 / 自由变量 ✅。
 

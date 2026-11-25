@@ -53,6 +53,44 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["div2_type"], "type")
         self.assertEqual(data["nested"], "inner")
 
+    def test_04_with_statement_is_supported(self):
+        data = run_worker("with")
+        self.assertEqual(data["fallback"], [], "with 语料不应回退")
+        for name in (
+            "simple", "nested_exit_order", "suppress_exc", "propagate_exc",
+            "return_inside", "break_inside_with", "continue_inside_with",
+            "with_in_try", "try_in_with", "loop_else_break",
+            "loop_else_no_break", "while_else_break", "while_else_no_break",
+            "pure_with_suppress", "pure_with_propagate", "pure_with", "pure_nested",
+        ):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+
+    def test_05_with_semantics_match_cpython(self):
+        data = run_worker("with")
+        # 进入 / 退出顺序 ✅
+        self.assertEqual(data["simple"], "enter:a|body:a|exit:a")
+        self.assertEqual(data["nested"], "enter:a|enter:b|body:ab|exit:b|exit:a")
+        # 异常被抑制 ✅ -> 继续执行 ✅
+        self.assertEqual(data["suppress"], "enter:a|before|exit:a:ValueError|after")
+        # 异常不被抑制 ✅ -> 向外传播 ✅
+        self.assertEqual(data["propagate"], "enter:a|exit:a:KeyError|caught")
+        # return / break / continue 都要先跑 __exit__ ✅
+        self.assertEqual(data["return_inside"], "ret:a")
+        self.assertEqual(data["break_inside"], 1)
+        self.assertEqual(data["continue_inside"], 5)
+        self.assertEqual(data["with_in_try"], "enter:a|exit:a:ZeroDivisionError|handled")
+        self.assertEqual(data["try_in_with"], "enter:a|inner|exit:a")
+        # for/while 的 else ✅ —— 只有**没 break** 才跑 ✅
+        self.assertEqual(data["loop_else_break"], [0])
+        self.assertEqual(data["loop_else_no_break"], [0, 1, 2, "else"])
+        self.assertEqual(data["while_else_break"], [0, 1])
+        self.assertEqual(data["while_else_no_break"], [0, 1, "else"])
+        # 纯函数 ✅
+        self.assertEqual(data["pure_suppress"], "suppressed")
+        self.assertEqual(data["pure_propagate"], "caught")
+        self.assertEqual(data["pure_with"], 11)
+        self.assertEqual(data["pure_nested"], 3)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

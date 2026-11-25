@@ -83,6 +83,36 @@ def op_try(out_dir: Path) -> dict:
     }
 
 
+def op_with(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_with.py", "cratix_corpus_with", out_dir)
+
+    def run(name):
+        mod.LOG.clear()
+        return getattr(mod, name)()
+
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "simple": run("simple"),
+        "nested": run("nested_exit_order"),
+        "suppress": run("suppress_exc"),
+        "propagate": run("propagate_exc"),
+        "return_inside": run("return_inside"),
+        "break_inside": run("break_inside_with"),
+        "continue_inside": run("continue_inside_with"),
+        "with_in_try": run("with_in_try"),
+        "try_in_with": run("try_in_with"),
+        "loop_else_break": run("loop_else_break"),
+        "loop_else_no_break": run("loop_else_no_break"),
+        "while_else_break": run("while_else_break"),
+        "while_else_no_break": run("while_else_no_break"),
+        "pure_suppress": mod.pure_with_suppress(),
+        "pure_propagate": mod.pure_with_propagate(),
+        "pure_with": mod.pure_with(True),
+        "pure_nested": mod.pure_nested(),
+    }
+
+
 def op_fallback(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_unsupported.py", "cratix_corpus_unsup", out_dir)
     return {
@@ -113,6 +143,8 @@ def main() -> int:
             data = op_fallback(out_dir)
         elif op == "try":
             data = op_try(out_dir)
+        elif op == "with":
+            data = op_with(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

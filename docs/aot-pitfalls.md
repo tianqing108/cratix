@@ -111,3 +111,28 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 25 | 分派代码**丢失** ✅（异常没被捕获 ✅）✅ | `emit_try_handlers()` 把代码追加到 `gen.lines` ✅，而函数体**早已 join** ✅ → 分派没进函数 ✅ | 改成**返回行列表** ✅ 由 `generate_function` 拼进去 ✅ |
 | 26 | handler 的临时变量**未声明** ✅ | handler 体在错误处才生成 ✅ → 临时变量登记太晚 ✅ | handler 体**在 try 处先生成** ✅（切到独立缓冲区 ✅）→ 临时变量及时登记 ✅ ✅ |
 | 27 | 标签**重定义** ✅ | 返回了整个 `gen.lines` ✅ → 函数体被复制了一遍 ✅ | 只返回**新增**的行 ✅ |
+
+## 追加：with 支持 + 语义对齐（v1）✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 28 | 带分支的函数编译报 `error C2065: cratix_an_v_name: 未声明的标识符` ✅ | interned 属性名的 `static PyObject *... = NULL;` 写在**首次使用的分支里** ✅ → 块作用域 ✅ → 别的分支看不见 ✅ | 声明**提升到函数顶部** ✅（`declared_attrs` 统一发声明 ✅） |
+| 29 | `try` 包 `with` 时异常**跳过外层 try** ✅（一路冒到函数外 ✅） | `with` 帧不抑制时先 `break` ✅ → 落到统一 no-match 分支 ✅ → **又弹了一次栈** ✅ → 把外层 try 帧也弹掉 ✅ | 不抑制时**直接** `PyErr_Restore` + `goto cratix_error` ✅（帧已经弹过 ✅） |
+| 30 | `__exit__` 调用报 `SystemError: NULL object passed to Py_BuildValue` ✅ | `PyObject_CallMethod(..., "OOO", t, v, tb)` 里 **traceback 常常是 NULL** ✅ → `Py_BuildValue` 不收 NULL ✅ | 传参前把 NULL 换成 `Py_None` ✅ |
+| 31 | 同一函数里**第二次进 try** 行为异常 ✅（栈越积越多 ✅） | handler **命中后没弹栈** ✅（只在 no-match 分支弹 ✅）→ 栈顶一直是旧帧 ✅ | 命中即 `cratix_try_n--` ✅ + 释放 handler 类型 ✅ |
+| 32 | `for ... else` 在 break 后**仍执行 else** ✅ | 生成的是"循环后直接跟 else 体" ✅ —— 少了一个 break 标志 ✅ | 每个循环一个 `broke` 标志 ✅ + 循环后 `if (!broke) { else 体 }` ✅ |
+
+**with 的实现方式** ✅（与 try 共用一套栈 ✅）：
+
+- **统一帧栈** ✅：try 帧编号 `0..N` ✅、with 帧编号 `>= 1000` ✅ —— 共用 `cratix_try_n` / `cratix_try_idx` ✅；
+- **进入** ✅：求值上下文 → `__enter__()` → 绑定 `as` 目标 → 压 with 帧（记管理器对象 ✅）；
+- **正常退出** ✅：弹帧 → `__exit__(None, None, None)` ✅（返回值忽略 ✅ —— 与 CPython 一致 ✅）；
+- **异常路径** ✅：错误分派处按**栈顶类型**分派 ✅ —— with 帧调 `__exit__(t, v, tb)` ✅：
+  返回真 → **抑制** ✅ → 跳到 with 结束标签**继续执行** ✅；返回假 → 异常**继续向外** ✅；
+- **return / break / continue** ✅：先走**退栈段**（`cratix_unwind`）✅ 把 with 的 `__exit__(None, None, None)` 跑完 ✅；
+- 多管理器 `with A as a, B as b` ✅：按**嵌套**生成（A 在外 ✅）→ 退出顺序 B → A ✅（与 CPython 实测一致 ✅）。
+
+**黄金模型同步** ✅：`irvm._exec_with` 改成 CPython 的**抑制语义** ✅ ——
+某层抑制后 ✅ 外层按**正常退出**收 `__exit__(None, None, None)` ✅（原来会把异常继续传给外层 ✅ ✅）。
+**作用域判定统一** ✅：`module_bindings()` 抽到 `frontend/scope.py` ✅ ——
+编译器与黄金模型共用 ✅（原来黄金模型不认识模块级的类 ✅ → 把 `Ctx` 当闭包 ✅ → 误判不可 AOT ✅）。
