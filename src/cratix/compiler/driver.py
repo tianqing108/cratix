@@ -746,6 +746,16 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     lambda_captures: dict = {}
     # **模块级控制流里的 def** ✅（(行, 列) -> {内部名, 公开名} ✅）
     mdef_names: dict = {}
+    # **全模块范围内的"函数名出现次数"** ✅（顶级 def ✅ + 控制流里的 def ✅）——
+    # 同名一律不 AOT ✅（C 里会重复定义 ✅）。
+    _public_counts: dict = {}
+    for _stmt in tree.body:
+        if isinstance(_stmt, ast.FunctionDef):
+            _public_counts[_stmt.name] = _public_counts.get(_stmt.name, 0) + 1
+    for _stmt in module_stmts:
+        for _child in ast.walk(_stmt):
+            if isinstance(_child, ast.FunctionDef):
+                _public_counts[_child.name] = _public_counts.get(_child.name, 0) + 1
     # **没法编译的 lambda** ✅（外层函数用到它时必须回退 ✅ 不能静默 ✅）
     lambda_blocked: set = set()
     # **模块级的 lambda** ✅ —— 以前只扫函数/方法体 ✅ ->
@@ -765,12 +775,28 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             except Unsupported as exc:
                 result.plans.append(FunctionPlan(child.name, False, exc.reason))
                 continue
+            # **同名模块级 def 也不 AOT** ✅（与顶级函数同一条规则 ✅ —— 否则 C 里重复定义 ✅）。
+            # 它们已经计入 `top_level_names` 之外的重复统计 ✅，这里只看"这个名字出现过几次" ✅。
+            if _public_counts.get(child.name, 0) > 1:
+                segment = _source_segment(source, child, dedent=True)
+                if segment:
+                    result.fallback_code[child.name + "#" + str(child.lineno)] = {
+                        "source": segment,
+                        "filename": str(path),
+                        "order": child.lineno,
+                    }
+                    result.plans.append(FunctionPlan(child.name, False, "同名函数（按源码顺序回退 ✅）"))
+                continue
             name = "_cratix_mdef_" + str(len(mdef_names))
             mdef_names[key] = {"name": name, "public": child.name}
             mdef_nodes.append(child)
             lambda_names[key] = name
             lambda_captures[key] = []
-            lambda_gens.append((name, built, []))
+            # **必须走 inner_gens（不是 lambda_gens）** ✅ —— lambda 的 gen 只把**参数**当局部 ✅，
+            # 而这些是**完整函数** ✅，有局部变量/except-as 等等 ✅。
+            # 以前放进 lambda_gens ✅ -> 局部变量没声明 ✅ -> `C2065 v_e 未声明` ✅
+            # （实测：`pip._vendor.distlib.util` ✅）。
+            inner_gens.append((name, child, set()))
 
     for stmt in module_stmts:
         for child in ast.walk(stmt):
@@ -937,8 +963,26 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     # **函数级回退的字节码来源** ✅：编译整个模块 ✅ 从 co_consts 里取函数 code object ✅
     # （比"抠源码再编译"稳 ✅ —— 行号/闭包/默认值都保真 ✅）
     # 保留 helper ✅（未来可用于字节码级回退 ✅）—— 当前用**内嵌源码** ✅
+    # **同名顶级函数** ✅（`if os.name == "nt": def open(...) elif ...: def open(...)` ✅）——
+    # 我们按**名字**生成 C 函数 ✅ -> 同名会**重复定义** ✅（实测：`pip._vendor.rich.progress` ✅
+    # 有 6 个 `def open` ✅）。Python 语义是"**后定义覆盖前一个**" ✅ ->
+    # 这些一律**不 AOT** ✅，改成**按源码顺序 exec 的回退函数** ✅（顺序正确 ✅ 语义正确 ✅）。
+    top_level_names: dict = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef):
+            top_level_names[stmt.name] = top_level_names.get(stmt.name, 0) + 1
     for stmt in tree.body:
         if not isinstance(stmt, ast.FunctionDef):
+            continue
+        if top_level_names.get(stmt.name, 0) > 1:
+            segment = _source_segment(source, stmt, dedent=True)
+            if segment:
+                result.fallback_code[stmt.name + "#" + str(stmt.lineno)] = {
+                    "source": segment,
+                    "filename": str(path),
+                    "order": stmt.lineno,
+                }
+                result.plans.append(FunctionPlan(stmt.name, False, "同名函数（按源码顺序回退 ✅）"))
             continue
         scope = analyze_function(stmt, module_globals)
         try:
