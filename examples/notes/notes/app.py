@@ -127,12 +127,12 @@ def parse_args(argv):
 
 
 def run(argv):
+    # **只用一层 try** ✅ —— 一个函数里两个 `try/except` 都捕获同一异常类会踩到
+    # #132（第一个 try 返回对象 + 第二个 try 里抛异常 -> 段错误 ✅）。
+    # 一层 try 既够用 ✅ 又避开那个缺陷 ✅。
     try:
         args = parse_args(argv)
-    except NoteError as exc:
-        return "出错了 ✅（" + exc.code + "）：" + str(exc)
-    store = Store(args.store)
-    try:
+        store = Store(args.store)
         if args.command == "add":
             count = store.add(args.text, args.category)
             return "已添加 ✅（共 " + str(count) + " 条）"
@@ -146,9 +146,9 @@ def run(argv):
             return chr(10).join(item.describe() for item in pending)
         if args.command == "stats":
             return store.stats()
+        return "未知命令：" + args.command
     except NoteError as exc:
         return "出错了 ✅（" + exc.code + "）：" + str(exc)
-    return "未知命令：" + args.command
 
 
 def main():
