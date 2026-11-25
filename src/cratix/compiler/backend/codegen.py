@@ -2454,10 +2454,15 @@ class FunctionGen:
             self.emit("if (" + t + " == NULL) goto cratix_error;")
             return True
         if name == "isinstance" and len(args) == 2:
+            # **`PyObject_IsInstance` 返回 int** ✅（1/0/-1 ✅）—— 直接存进 `PyObject*` 是**指针错误** ✅
+            # （与 `hasattr` 同一个坑 ✅ 实测：`isinstance(x, list)` 直接段错误 ✅）
             a = self.emit_expr(args[0])
             b = self.emit_expr(args[1])
-            self.emit(t + " = PyObject_IsInstance(" + a + ", " + b + ");")
-            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            self.emit("{")
+            self.emit("    int cratix_isinst = PyObject_IsInstance(" + a + ", " + b + ");")
+            self.emit("    if (cratix_isinst < 0) goto cratix_error;")
+            self.emit("    " + t + " = Py_NewRef(cratix_isinst ? Py_True : Py_False);")
+            self.emit("}")
             return True
         if name == "hasattr" and len(args) == 2:
             # **`PyObject_HasAttrString` 返回 int** ✅（0/1 ✅）—— 直接存进 PyObject* 是**指针错误** ✅

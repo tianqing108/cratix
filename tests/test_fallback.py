@@ -409,6 +409,15 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["mismatches"], [], "AOT 与源码版的运算符结果不一致")
         self.assertGreater(data["compared"], 60, "差分用例太少")
 
+    def test_30_forms_differential(self):
+        """**常见形态差分** ✅ —— 内建 ✅ / 容器与字符串方法 ✅ / 切片 ✅ / 推导式 ✅ /
+        解包 ✅ / f-string ✅ / 异常 ✅ / with ✅（源码版当基准 ✅）。"""
+        data = run_worker("forms")
+        self.assertTrue(data["module_ok"])
+        self.assertEqual(data["fallback"], [], "常见形态都该能 AOT")
+        self.assertEqual(data["mismatches"], [])
+        self.assertGreaterEqual(data["compared"], 15)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

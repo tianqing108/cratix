@@ -143,6 +143,57 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_forms(out_dir: Path) -> dict:
+    """**常见形态差分** ✅ —— 源码版当基准 ✅ 逐项比 ✅。"""
+    import importlib.util
+
+    mc, mod = _compile("corpus_forms.py", "cratix_corpus_forms", out_dir)
+    corpus = Path(__file__).resolve().parent / "corpus" / "corpus_forms.py"
+    spec = importlib.util.spec_from_file_location("cratix_src_forms", corpus)
+    source = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(source)
+
+    cases = [
+        ("builtins", ([3, 1, 2],)),
+        ("string_methods", ("hello world",)),
+        ("list_methods", ([3, 1, 2],)),
+        ("dict_methods", ([("a", 1), ("b", 2)],)),
+        ("set_methods", ([1, 2, 3],)),
+        ("slicing", ([1, 2, 3, 4, 5], "hello")),
+        ("unpacking", ([1, 2, 3, 4],)),
+        ("comprehensions", ([1, 2, 3, 4],)),
+        ("fstrings", ("x", 7, 3.14159)),
+        ("exception_flow", ([1, 2, 3],)),
+        ("exception_flow", ([1, -2, 3],)),
+        ("try_finally", ([],)),
+        ("loops", ([1, 2, 0, 20, 5],)),
+        ("with_class", ([1, 2, 3],)),
+        ("use_with", ([],)),
+    ]
+
+    mismatches = []
+    for name, args in cases:
+        try:
+            expected = getattr(source, name)(*args)
+            expected_repr = repr(expected)
+        except Exception as exc:  # noqa: BLE001
+            expected_repr = "EXC:" + type(exc).__name__ + ":" + str(exc)
+        try:
+            actual = getattr(mod, name)(*args)
+            actual_repr = repr(actual)
+        except Exception as exc:  # noqa: BLE001
+            actual_repr = "EXC:" + type(exc).__name__ + ":" + str(exc)
+        if actual_repr != expected_repr:
+            mismatches.append(f"{name}{args}: aot={actual_repr} src={expected_repr}")
+
+    return {
+        "module_ok": mc.module_ok,
+        "fallback": sorted(mc.fallback_names),
+        "compared": len(cases),
+        "mismatches": mismatches,
+    }
+
+
 def op_operators(out_dir: Path) -> dict:
     """**运算符差分** ✅ —— 同一个语料分别用**源码**和 **AOT** 跑 ✅，逐个比 ✅。"""
     import importlib.util
@@ -627,6 +678,8 @@ def main() -> int:
             data = op_attr_branches(out_dir)
         elif op == "operators":
             data = op_operators(out_dir)
+        elif op == "forms":
+            data = op_forms(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

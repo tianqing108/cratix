@@ -153,6 +153,23 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **追加发现** ✅：工厂路径里 `Py_DECREF(args)` 之后**忘了置 NULL** ✅ ->
 函数出口的清理**又 DECREF 一次** ✅ -> 双重释放 ✅（已修 ✅，但**不是**析构崩溃的唯一原因 ✅）。
 
+## 追加：#135 **形态差分测试**（抓到 `isinstance` 段错误 ✅）
+
+顺着"有限清单排一遍"的思路 ✅，又加了 `tests/corpus/corpus_forms.py` ✅：
+内建函数 ✅ / 列表·字典·集合·字符串方法 ✅ / 切片 ✅ / 解包 ✅ / 推导式 ✅ /
+f-string ✅ / 异常（`else` ✅ `finally` ✅）/ `with` ✅ / 类与属性 ✅。
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 135 | `isinstance(x, list)` **直接段错误** ✅ | `PyObject_IsInstance` 返回 **int**（1/0/-1 ✅），却被存进 `PyObject*` 临时变量 ✅ —— 和 #106 的 `hasattr` **完全同一个坑** ✅ | 先取 `int` ✅、判 `< 0` ✅、再 `Py_NewRef(cond ? Py_True : Py_False)` ✅ |
+
+**顺带审计** ✅：其它"返回 int"的 API（`PyObject_IsTrue` ✅ / `PySequence_Contains` ✅ /
+`PyObject_RichCompareBool` ✅）都走 `int` 临时变量 ✅ —— 只有 `isinstance` 漏了 ✅。
+
+**教训** ✅：`PyObject_*` 系列里**返回 int 的**（`IsInstance` ✅ `IsTrue` ✅ `HasAttr` ✅
+`RichCompareBool` ✅ `Sequence_Contains` ✅）必须显式转成布尔对象 ✅ ——
+直接当指针用要么立刻崩 ✅ 要么在后面某个不相干的地方崩 ✅。
+
 ## 追加：#134 **运算符差分测试**（一上手就抓到 `**` 编译失败 ✅）
 
 **动机** ✅：`in` / `not in` 的极性**整个写反**过 ✅，而当时**没有任何测试覆盖** ——
