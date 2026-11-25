@@ -245,6 +245,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.plans.append(FunctionPlan(stmt.name, True, ""))
         for name in list(gen.params.get("names", [])) + list(gen.params.get("kwonly", [])):
             key_names.append(name)
+        # **全局名字的静态键** ✅
+        key_names.extend(sorted(gen.global_names))
 
     # --- 类 ✅（v1：简单 object 子类 ✅）---
     for stmt in tree.body:
@@ -306,6 +308,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **方法参数也要 intern 键** ✅（绑定代码要用 ✅）
                 for pname in list(self_params.get("names", [])) + list(self_params.get("kwonly", [])):
                     key_names.append(pname)
+                key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
             elif isinstance(item, ast.Assign):
                 class_info["attrs"].append((item.targets[0].id, builder.build_expr(item.value)))
@@ -324,6 +327,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             result.module_reason = exc.reason
             return result
 
+    if module_gen is not None:
+        key_names.extend(sorted(module_gen.global_names))
     result.key_names = key_names
     result.module_gen = module_gen
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）

@@ -46,6 +46,31 @@ static PyObject *cratix_load_name(PyObject *globals, PyObject *builtins, const c
     return NULL;
 }
 
+/* 名字查找（**静态键版** ✅）：模块全局 -> 内建 ✅
+ * 返回**新引用** ✅；失败返回 NULL 且异常已设置 ✅。
+ * 与 `cratix_load_name` 的区别 ✅：键是模块 init 里 intern 好的 ✅（不再每次 InternFromString ✅）。 */
+static PyObject *cratix_load_key(PyObject *globals, PyObject *builtins, PyObject *key, const char *name) {
+    PyObject *v;
+    if (globals != NULL) {
+        v = PyDict_GetItemWithError(globals, key);
+        if (v != NULL) {
+            Py_INCREF(v);
+            return v;
+        }
+        if (PyErr_Occurred()) return NULL;
+    }
+    if (builtins != NULL) {
+        v = PyDict_GetItemWithError(builtins, key);
+        if (v != NULL) {
+            Py_INCREF(v);
+            return v;
+        }
+        if (PyErr_Occurred()) return NULL;
+    }
+    PyErr_Format(PyExc_NameError, "name '%s' is not defined", name);
+    return NULL;
+}
+
 /* 真值语义 ✅（与 CPython 一致 ✅） */
 static int cratix_truth(PyObject *o) {
     int r = PyObject_IsTrue(o);
@@ -65,6 +90,11 @@ static PyObject *cratix_format(PyObject *value, PyObject *spec) {
         out = PyObject_Format(value, spec);
     }
     return out;
+}
+
+/* 空字符串 ✅（f-string 的分隔符 ✅ —— 返回**新引用** ✅） */
+static PyObject *cratix_empty_str(void) {
+    return PyUnicode_FromStringAndSize("", 0);
 }
 
 /* 异常对象构造 ✅（raise 的值可能是类 ✅ 也可能是实例 ✅） */

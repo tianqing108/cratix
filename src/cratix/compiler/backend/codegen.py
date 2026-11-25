@@ -676,6 +676,9 @@ class FunctionGen:
         # **推导式作用域栈** ✅ —— 每层推导式一个 {名字: C 临时变量} ✅
         # （Python 3 的推导式有**独立作用域** ✅ -> 目标名不能污染函数局部 ✅）
         self.comp_scopes: list = []
+        # **用到的模块全局/内建名字** ✅ —— 编译期收集 ✅，模块 init 里 intern 成静态键 ✅
+        # （否则每次取名字都要 `PyUnicode_InternFromString` ✅ 真开销 ✅）
+        self.global_names: set = set()
         self.loop_stack: list = []
         self.loop_index = 0
         self.label_index = 0
@@ -1453,7 +1456,12 @@ class FunctionGen:
                 self.emit(t + " = " + var + ";")
                 self.emit("Py_XINCREF(" + t + ");")
             else:
-                self.emit(t + " = cratix_load_name(cratix_globals, cratix_builtins, " + c_string(name) + ");")
+                # **走静态键** ✅（模块 init 里 intern 一次 ✅）
+                self.global_names.add(name)
+                self.emit(
+                    t + " = cratix_load_key(cratix_globals, cratix_builtins, cratix_key_"
+                    + c_ident(name) + ", " + c_string(name) + ");"
+                )
                 self.emit("if (" + t + " == NULL) goto cratix_error;")
             return t
         if kind == "attr":
@@ -1648,10 +1656,11 @@ class FunctionGen:
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
         else:
             self.emit("cratix_kwnames = NULL;")
-        self.emit("cratix_mname = PyUnicode_FromString(" + c_string(target.get("attr")) + ");")
-        self.emit("if (cratix_mname == NULL) goto cratix_error;")
-        self.emit(t + " = PyObject_VectorcallMethod(cratix_mname, cratix_vargs, " + str(n + 1) + " | PY_VECTORCALL_ARGUMENTS_OFFSET, cratix_kwnames);")
-        self.emit("Py_DECREF(cratix_mname);")
+        # **方法名走常量池** ✅ —— 原来**每次调用**都 `PyUnicode_FromString` ✅（真分配 ✅）
+        mname = self.emit_const_piece(target.get("attr"))
+        self.emit(t + " = PyObject_VectorcallMethod(" + mname + ", cratix_vargs, " + str(n + 1) + " | PY_VECTORCALL_ARGUMENTS_OFFSET, cratix_kwnames);")
+        self.emit("Py_DECREF(" + mname + ");")
+        self.emit(mname + " = NULL;")
         if n_kw:
             self.emit("Py_DECREF(cratix_kwnames);")
             self.emit("cratix_kwnames = NULL;")
@@ -1794,21 +1803,51 @@ class FunctionGen:
                 v = self.emit_expr(value)
                 self.emit("if (PyDict_SetItem(" + t + ", " + k + ", " + v + ") < 0) goto cratix_error;")
 
+    def emit_const_piece(self, value) -> str:
+        """常量字符串 -> 池化引用 ✅（新引用 ✅）。"""
+        piece = self.new_tmp()
+        if self.use_pool:
+            name = self.consts.ref(value)
+            self.emit(piece + " = " + name + ";")
+            self.emit("Py_INCREF(" + piece + ");")
+        else:
+            self.emit(piece + " = " + const_expr(value) + ";")
+            self.emit("if (" + piece + " == NULL) goto cratix_error;")
+        return piece
+
     def emit_joinedstr(self, node, t) -> None:
-        parts = self.new_tmp()
-        self.emit(parts + " = PyList_New(0);")
-        self.emit("if (" + parts + " == NULL) goto cratix_error;")
-        for child in node.kids:
+        """f-string ✅。
+
+        **优化** ✅：
+        - 常量片段走**常量池** ✅（原来每次 `PyUnicode_FromString` 真分配 ✅）；
+        - 只有一段时**不建列表** ✅（直接转移 ✅）；
+        - 多段用 `PyList_New(n)` + `SET_ITEM` ✅（省掉 n 次 Append ✅）。
+        """
+        kids = list(node.kids)
+        if not kids:
+            self.emit(t + " = cratix_empty_str();")
+            return
+        if len(kids) == 1:
+            child = kids[0]
             if child.kind == "const":
-                piece = self.new_tmp()
-                self.emit(piece + " = PyUnicode_FromString(" + c_string(child.get("value")) + ");")
-                self.emit("if (" + piece + " == NULL) goto cratix_error;")
+                piece = self.emit_const_piece(child.get("value"))
             else:
                 piece = self.emit_expr(child)
-            self.emit("if (PyList_Append(" + parts + ", " + piece + ") < 0) goto cratix_error;")
-        sep = self.new_tmp()
-        self.emit(sep + " = PyUnicode_FromString(\"\");")
-        self.emit("if (" + sep + " == NULL) goto cratix_error;")
+            self.emit(t + " = " + piece + ";")
+            self.emit(piece + " = NULL;")
+            return
+        parts = self.new_tmp()
+        self.emit(parts + " = PyList_New(" + str(len(kids)) + ");")
+        self.emit("if (" + parts + " == NULL) goto cratix_error;")
+        for i, child in enumerate(kids):
+            if child.kind == "const":
+                piece = self.emit_const_piece(child.get("value"))
+            else:
+                piece = self.emit_expr(child)
+            # **SET_ITEM 取走引用** ✅ —— 所以先置 NULL ✅ 免得清理时二次释放 ✅
+            self.emit("PyList_SET_ITEM(" + parts + ", " + str(i) + ", " + piece + ");")
+            self.emit(piece + " = NULL;")
+        sep = self.emit_const_piece("")
         self.emit(t + " = PyUnicode_Join(" + sep + ", " + parts + ");")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
 
@@ -1831,7 +1870,18 @@ class FunctionGen:
             base = value
         spec = node.get("format_spec")
         if spec is None:
-            self.emit(t + " = cratix_format(" + base + ", NULL);")
+            if conv == -1:
+                # 无转换无格式 ✅ -> **`format(value, "")`** ✅（走 `__format__` ✅ —— 与 CPython 一致 ✅；
+                # 用 `str()` 会漏掉自定义 `__format__` ✅）
+                self.emit(t + " = PyObject_Format(" + base + ", NULL);")
+            else:
+                # `!r`/`!s`/`!a` 的结果已经是 str ✅ -> 空格式就是它本身 ✅（省一次 format ✅）
+                self.emit(t + " = " + base + ";")
+                self.emit(base + " = NULL;")
+        elif spec.kind == "const" and isinstance(spec.get("value"), str):
+            # **静态格式串** ✅（`:03d` 之类最常见 ✅）—— 直接走常量池 ✅，不建列表 ✅
+            spec_piece = self.emit_const_piece(spec.get("value"))
+            self.emit(t + " = cratix_format(" + base + ", " + spec_piece + ");")
         else:
             spec_str = self.emit_expr(spec)
             self.emit(t + " = cratix_format(" + base + ", " + spec_str + ");")

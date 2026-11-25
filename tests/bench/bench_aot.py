@@ -25,17 +25,20 @@ from cratix.compiler import driver, loader
 
 CORPUS = ROOT / "tests" / "corpus"
 
-# (语料, 函数, 参数, 迭代次数)
-# 迭代次数要够大 ✅ —— 否则测量窗口太小 ✅（0.01 ms 级 ✅）噪声压过信号 ✅ ✅。
+# (语料, 函数, 参数, **每次计时里的调用次数**)
+#
+# **必须真跑一批** ✅ —— 旧口径只计时**一次调用** ✅ 再乘以系数 ✅：
+# 单次调用的窗口在 1 µs 量级 ✅ -> 噪声（调度/缓存/TSC）压过信号 ✅
+# （实测同一用例在 0.20~0.40 ms 之间跳 ✅）。现在在计时区间内跑 `iters` 次 ✅。
 CASES = [
-    ("corpus_basic", "add", (2, 3), 2000000),
-    ("corpus_basic", "control", (12,), 200000),
-    ("corpus_basic", "strings", ("bob", 3), 200000),
-    ("corpus_basic", "containers", ([1, 2, 3, 4, 5],), 100000),
-    ("corpus_basic", "mixed", (1, 2, 3, 4), 200000),
+    ("corpus_basic", "add", (2, 3), 300000),
+    ("corpus_basic", "control", (12,), 20000),
+    ("corpus_basic", "strings", ("bob", 3), 50000),
+    ("corpus_basic", "containers", ([1, 2, 3, 4, 5],), 10000),
+    ("corpus_basic", "mixed", (1, 2, 3, 4), 30000),
     # **常量池** ✅：循环里的字面量 ✅（字符串/bytes 每次新建会明显变慢 ✅）
-    ("corpus_consts", "loop_str", (20000,), 20),
-    ("corpus_consts", "loop_num", (20000,), 20),
+    ("corpus_consts", "loop_str", (2000,), 100),
+    ("corpus_consts", "loop_num", (2000,), 100),
 ]
 
 
@@ -47,15 +50,16 @@ def _load_source(name: str):
     return module
 
 
-def _time(fn, args, repeat: int) -> float:
-    """跑 repeat 轮 ✅ —— 取**最快**一轮 ✅（减少噪声 ✅）。
+def _time(fn, args, iters: int, repeat: int) -> float:
+    """在计时区间内跑 `iters` 次 ✅ —— 取**最快**一轮 ✅（减少噪声 ✅）。
 
-    轮数要多 ✅ —— 机器负载波动很大 ✅（实测同一用例 0.20~0.40 ms ✅）✅。
+    **不要只计时一次调用** ✅：单次窗口太小 ✅，噪声能盖住真实差异 ✅（实测 ✅）。
     """
     best = float("inf")
     for _ in range(repeat):
         start = time.perf_counter()
-        fn(*args)
+        for _ in range(iters):
+            fn(*args)
         elapsed = time.perf_counter() - start
         if elapsed < best:
             best = elapsed
@@ -83,23 +87,43 @@ def main() -> int:
         mc = driver.compile_module(CORPUS / (corpus + ".py"), "bench_" + corpus)
         pyd = driver.build_pyd(mc, out_dir)
         aots[corpus] = loader.load_compiled_module(pyd, mc.init_symbol)
-    print("%-28s %12s %12s %9s" % ("case", "source(ms)", "aot(ms)", "speedup"))
+    print("%-28s %12s %12s %9s" % ("case", "source(us)", "aot(us)", "speedup"))
     print("-" * 66)
     total_src = 0.0
     total_aot = 0.0
     for corpus, func, call, iters in CASES:
         src_fn = getattr(sources[corpus], func)
         aot_fn = getattr(aots[corpus], func)
-        n = max(1, iters // 1000)
-        t_src = _time(src_fn, call, args.repeat) * n
-        t_aot = _time(aot_fn, call, args.repeat) * n
+        # **每次调用的微秒数** ✅
+        t_src = _time(src_fn, call, iters, args.repeat) / iters * 1e6
+        t_aot = _time(aot_fn, call, iters, args.repeat) / iters * 1e6
         total_src += t_src
         total_aot += t_aot
         speed = (t_src / t_aot) if t_aot > 0 else 0.0
-        print("%-28s %12.2f %12.2f %8.2fx" % (corpus + "." + func, t_src * 1000, t_aot * 1000, speed))
+        print("%-28s %12.3f %12.3f %8.2fx" % (corpus + "." + func, t_src, t_aot, speed))
     print("-" * 66)
     overall = (total_src / total_aot) if total_aot > 0 else 0.0
-    print("%-28s %12.2f %12.2f %8.2fx" % ("TOTAL", total_src * 1000, total_aot * 1000, overall))
+    print("%-28s %12.3f %12.3f %8.2fx" % ("TOTAL(按耗时加权)", total_src, total_aot, overall))
+    # **几何平均** ✅ —— 每个用例等权 ✅（TOTAL 会被长用例主导 ✅）
+    speeds = []
+    for corpus, func, call, iters in CASES:
+        src_fn = getattr(sources[corpus], func)
+        aot_fn = getattr(aots[corpus], func)
+        t_src = _time(src_fn, call, iters, args.repeat)
+        t_aot = _time(aot_fn, call, iters, args.repeat)
+        if t_aot > 0:
+            speeds.append(t_src / t_aot)
+    geo = 1.0
+    for s in speeds:
+        geo *= max(s, 1e-9)
+    geo = geo ** (1.0 / len(speeds)) if speeds else 0.0
+    core = speeds[:5]
+    geo_core = 1.0
+    for s in core:
+        geo_core *= max(s, 1e-9)
+    geo_core = geo_core ** (1.0 / len(core)) if core else 0.0
+    print("%-28s %12s %12s %8.2fx" % ("GEO-MEAN(全部)", "-", "-", geo))
+    print("%-28s %12s %12s %8.2fx" % ("GEO-MEAN(corpus_basic)", "-", "-", geo_core))
     return 0
 
 
