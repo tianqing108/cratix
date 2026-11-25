@@ -114,6 +114,10 @@ class GoldenModelTest(unittest.TestCase):
         tree = diff.module_tree(path)
         for name in ("gen", "closure", "uses_global"):
             supported, reason = diff.classify(tree, name)
+            # **global 已支持** ✅（作用域名从局部剔除 ✅，赋值走模块字典 ✅）
+            if name in ("uses_global",):
+                self.assertTrue(supported, name + " 现在应当被支持")
+                continue
             self.assertFalse(supported, name + " 应当被拒绝")
             self.assertTrue(reason, name + " 应当给出拒绝原因")
 

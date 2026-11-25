@@ -143,6 +143,21 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_extras(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_extras.py", "cratix_corpus_extras", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "module_ok": mc.module_ok,
+        "counter": mod.counter(),
+        "accumulate": mod.accumulate(),
+        "local_import": mod.local_import(),
+        "imported": mod.imported(),
+        "reset": mod.reset_counter(),
+        "after_reset": mod.read_counter(),
+    }
+
+
 def op_finally(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_finally.py", "cratix_corpus_finally", out_dir)
     cases = [
@@ -319,6 +334,8 @@ def main() -> int:
             data = op_methods(out_dir)
         elif op == "finally":
             data = op_finally(out_dir)
+        elif op == "extras":
+            data = op_extras(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

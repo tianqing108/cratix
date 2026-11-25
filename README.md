@@ -20,7 +20,7 @@
 | M0 骨架 + vendor | ✅ 完成 |
 | M1 运行期 + 双形态 | ✅ 完成（onefile + onedir 双形态 + 零落盘 + 可复现） |
 | M2 AOT 内核 | ✅ 完成（自研编译器产出 .pyd，已接入打包链，运行期从内存加载 ✅） |
-| M3 子集扩展 | ✅ **完成**（类 / try-except / **try-else · try-finally ✅** / with / 循环 else / 装饰器 / property / 推导式（含多生成器·解包·嵌套）/ 生成器表达式（真惰性）/ 元数据保真） |
+| M3 子集扩展 | ✅ **完成**（含 `from … import` ✅ / `global` ✅ / 非局部复合赋值 ✅；自测语料 AOT 覆盖率 **92.9%**）（类 / try-except / **try-else · try-finally ✅** / with / 循环 else / 装饰器 / property / 推导式（含多生成器·解包·嵌套）/ 生成器表达式（真惰性）/ 元数据保真） |
 | M4 增量/可复现 | ✅ 完成（指纹增量 + report.json + 可复现） |
 | M5 性能 | 🟡 全部用例几何平均 1.13×（add 1.39×）；AOT 覆盖率报告 + strict-aot 严格模式 |
 | M6 跨平台 | 🟡 **四接口抽象 ✅ + Linux/macOS 占位 ✅**（Windows 全走接口 ✅，真实移植未做） |

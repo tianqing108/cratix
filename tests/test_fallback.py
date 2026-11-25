@@ -41,8 +41,9 @@ def run_worker(op: str) -> dict:
 class FunctionFallbackTest(unittest.TestCase):
     def test_01_unsupported_functions_are_embedded(self):
         data = run_worker("fallback")
-        self.assertEqual(data["fallback"], ["closure", "gen", "uses_global"])
-        self.assertEqual(data["embedded"], ["closure", "gen", "uses_global"])
+        # **global 现在能 AOT 了** ✅（只剩闭包与生成器回退 ✅）
+        self.assertEqual(data["fallback"], ["closure", "gen"])
+        self.assertEqual(data["embedded"], ["closure", "gen"])
 
     def test_02_try_except_is_supported(self):
         data = run_worker("try")
@@ -205,6 +206,18 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(values["value_after"], 44)
         # 只有"带嵌套 def"的那个回退 ✅（闭包不支持 ✅）
         self.assertEqual(data["fallback"], ["with_return"])
+
+    def test_13_imports_globals_augassign(self):
+        """`from ... import` ✅ / `global` ✅ / 非局部复合赋值 ✅ —— 真实代码最常见的三件事 ✅。"""
+        data = run_worker("extras")
+        self.assertTrue(data["module_ok"], "有 from-import 的模块必须能编译")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["counter"], 5)
+        self.assertEqual(data["accumulate"], 17)
+        self.assertEqual(data["local_import"], "y.txt:2")
+        self.assertEqual(data["imported"], "a|1")
+        self.assertEqual(data["reset"], 0)
+        self.assertEqual(data["after_reset"], 0)
 
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")

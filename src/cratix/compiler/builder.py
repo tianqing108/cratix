@@ -126,11 +126,24 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             var = build_expr(item.optional_vars) if item.optional_vars is not None else None
             pairs.extend([ctx, var])
         return ir.node("with", *pairs, body=[build_stmt(s) for s in node.body])
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        # **`global` / `nonlocal` 声明** ✅ —— 运行期**没有动作** ✅：
+        # 作用域分析已经把这些名字从"局部"里剔除 ✅ -> 赋值自然走模块字典 ✅。
+        return ir.node("noop")
     if isinstance(node, ast.Import):
         names = []
         for alias in node.names:
             names.append((alias.name, alias.asname))
         return ir.node("import", names=names)
+    if isinstance(node, ast.ImportFrom):
+        # **`from ... import ...`** ✅ —— 真实代码里到处都是 ✅（不支持的话整个模块都得回退 ✅）。
+        # 相对导入的**绝对名**由 codegen 按模块包名解析 ✅（builder 不知道包名 ✅）。
+        names = []
+        for alias in node.names:
+            if alias.name == "*":
+                raise Unsupported("from ... import *（整函数回退）")
+            names.append((alias.name, alias.asname))
+        return ir.node("importfrom", module=node.module or "", level=node.level, names=names)
     if isinstance(node, ast.FunctionDef):
         flags = ("async", bool(node.decorator_list))
         return ir.node(

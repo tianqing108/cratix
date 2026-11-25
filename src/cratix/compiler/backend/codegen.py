@@ -892,7 +892,9 @@ class FunctionGen:
 
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
                  class_methods=None, self_attr_writes=None, method_mode=False,
-                 known_classes=None, enclosing_class=None):
+                 known_classes=None, enclosing_class=None, package=""):
+        # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
+        self.package = package or ""
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
         self.method_mode = bool(method_mode)
@@ -1146,6 +1148,22 @@ class FunctionGen:
         self.emit("    " + ref + " = PyUnicode_InternFromString(" + c_string(target_attr(node)) + ");")
         self.emit("    if (" + ref + " == NULL) goto cratix_error;")
         self.emit("}")
+
+    def bind_name(self, name: str, value_var: str) -> None:
+        """把 value_var（**所有权转移** ✅）绑到名字上 ✅ —— 局部写局部 ✅，否则写模块全局 ✅。
+
+        **函数里的 import 必须绑定局部** ✅ —— 以前一律写 globals ✅ ->
+        局部变量永远是 NULL ✅ -> 用到就崩 ✅（实测：访问违例 ✅）。
+        """
+        if name in self.scope.locals_ and name not in self.global_names:
+            var = self.local_var(name)
+            self.emit("Py_XDECREF(" + var + ");")
+            self.emit(var + " = " + value_var + ";")
+            self.emit(value_var + " = NULL;")
+            return
+        self.emit("if (PyDict_SetItemString(cratix_globals, " + c_string(name) + ", " + value_var + ") < 0) goto cratix_error;")
+        self.emit("Py_DECREF(" + value_var + ");")
+        self.emit(value_var + " = NULL;")
 
     def emit_try(self, node) -> None:
         """try/except ✅ —— 通过**每函数的 try 栈** + 错误处的 handler 分派 ✅ ✅。
@@ -1626,7 +1644,17 @@ class FunctionGen:
                 self.emit("Py_XSETREF(" + var + ", " + tmp + ");")
                 self.emit(tmp + " = NULL;")
             else:
-                raise Unsupported("复合赋值到非局部目标")
+                # **非局部目标** ✅（`obj.attr += x` / `d[k] += v` ✅）：
+                # 直接展开成「读 + 算 + 写」✅ —— 与 Python 语义一致 ✅（读/写各一次 ✅）。
+                fn = AUG_FUNCS.get(node.get("op"))
+                if fn is None:
+                    raise Unsupported("复合赋值：未知运算符")
+                current = self.emit_expr(target)
+                other = self.new_tmp()
+                self.emit(other + " = " + fn + "(" + current + ", " + rhs + ");")
+                self.emit("if (" + other + " == NULL) goto cratix_error;")
+                self.emit_assign(target, other)
+                return
             return
         if kind == "return":
             if node.kids:
@@ -1709,7 +1737,7 @@ class FunctionGen:
             self.emit_helper_cleanup(frame["helpers"])
             self.emit("continue;")
             return
-        if kind == "pass":
+        if kind == "pass" or kind == "noop":
             return
         if kind == "raise":
             t = self.emit_expr(node.kids[0])
@@ -1726,6 +1754,42 @@ class FunctionGen:
                 self.emit("    PyErr_SetString(PyExc_AssertionError, \"\");")
             self.emit("    goto cratix_error;")
             self.emit("}")
+            return
+        if kind == "importfrom":
+            module_src = node.get("module") or ""
+            level = int(node.get("level") or 0)
+            if level == 0:
+                # **绝对导入** ✅（level=0 ✅ —— 不要加包名前缀 ✅）
+                absolute = module_src
+            else:
+                base = self.package
+                for _ in range(level - 1):
+                    base = base.rpartition(".")[0]
+                absolute = (base + "." + module_src) if module_src else base
+            if absolute == "__future__":
+                # **编译指令** ✅ —— 对我们没有运行期含义 ✅（注解不求值 ✅）
+                return
+            if not absolute:
+                raise Unsupported("相对导入没有包上下文")
+            key = self.new_tmp()
+            self.emit(key + " = " + const_expr(absolute) + ";")
+            self.emit("if (" + key + " == NULL) goto cratix_error;")
+            mod = self.new_tmp()
+            self.emit(mod + " = PyImport_Import(" + key + ");")
+            self.emit("if (" + mod + " == NULL) goto cratix_error;")
+            for name, asname in node.get("names", []):
+                bind = asname or name
+                val = self.new_tmp()
+                self.emit(val + " = PyObject_GetAttrString(" + mod + ", " + c_string(name) + ");")
+                self.emit("if (" + val + " == NULL) {")
+                self.emit("    Py_DECREF(" + mod + ");")
+                self.emit("    " + mod + " = NULL;")
+                self.emit("    goto cratix_error;")
+                self.emit("}")
+                self.bind_name(bind, val)
+            # **子模块也能被找到** ✅（CPython 的 import fromlist 会顺手导入子模块 ✅）
+            self.emit("Py_DECREF(" + mod + ");")
+            self.emit(mod + " = NULL;")
             return
         if kind == "import":
             # **import 语句** ✅ —— 绑定到模块字典 ✅（= 模块全局 ✅）
@@ -1756,13 +1820,7 @@ class FunctionGen:
                     bind_val = self.new_tmp()
                     self.emit(bind_val + " = PyImport_Import(" + top_key + ");")
                     self.emit("if (" + bind_val + " == NULL) goto cratix_error;")
-                self.emit(
-                    "if (PyDict_SetItemString(cratix_globals, "
-                    + c_string(bind_name)
-                    + ", "
-                    + bind_val
-                    + ") < 0) goto cratix_error;"
-                )
+                self.bind_name(bind_name, bind_val)
             return
         if kind == "try":
             self.emit_try(node)

@@ -31,7 +31,7 @@ UNSUPPORTED_NODES = {
     ast.Match: "match 语句",
     ast.Nonlocal: "nonlocal 声明",
     ast.Delete: "del 语句",
-    ast.ImportFrom: "from ... import（模块级导入单独处理 ✅）",
+    # **`from ... import ...`** ✅ 已支持 ✅（模块级/函数级同一套生成 ✅）
 }
 
 
@@ -81,5 +81,5 @@ def check_function(node: ast.FunctionDef, scope) -> None:
             raise Unsupported("嵌套定义（" + type(child).__name__ + "）")
         if isinstance(child, ast.Lambda):
             raise Unsupported("lambda 表达式（M3 起支持）")
-        if isinstance(child, ast.Global):
-            raise Unsupported("global 声明（写全局变量）")
+        # **`global` 声明** ✅ 已支持 ✅ —— 作用域分析会把这些名字从局部里剔除 ✅，
+        # 赋值走模块字典 ✅（codegen 的 emit_assign 里已有对应分支 ✅）。

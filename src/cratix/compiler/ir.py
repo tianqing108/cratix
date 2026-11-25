@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 KIND_FIELDS = {
     # --- 模块 / 语句 ---
     "module": ("body",),
-    "import": ("names",),                     # names: [(module, asname|None)]
+    "import": ("names",),                      # names: [(module, asname|None)]
+    "importfrom": ("module", "level", "names"),  # from module import names ✅（module 可为空 ✅）                     # names: [(module, asname|None)]
     "import_from": ("module", "names", "level"),
     "assign": ("targets",),                  # kids: [value]
     "augassign": ("op", "target"),            # kids: [value]
@@ -30,6 +31,7 @@ KIND_FIELDS = {
     "break": (),
     "continue": (),
     "pass": (),
+    "noop": (),                              # 声明类语句 ✅（global/nonlocal ✅）
     "raise": (),                             # kids: [exc|None, cause|None]
     "assert": (),                            # kids: [test, msg|None]
     "try": ("body", "handlers", "orelse", "finalbody"),

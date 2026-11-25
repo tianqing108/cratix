@@ -240,6 +240,9 @@ def _module_level_supported(stmt) -> bool:
         return isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str)
     if isinstance(stmt, ast.Import):
         return True
+    # **`from ... import ...`** ✅ —— 以前这一条不认 ✅ -> 整个模块回退 ✅（真实代码几乎都中招 ✅）
+    if isinstance(stmt, ast.ImportFrom):
+        return all(alias.name != "*" for alias in stmt.names)
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return True
     # **类不进模块语句表** ✅ —— 调用方已经先跳过 ✅；
@@ -321,6 +324,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             gen = codegen.FunctionGen(
                 stmt.name, built.get("params"), built.get("body", []), scope, consts,
                 known_classes=class_slots_map,
+                # **函数里的相对导入** ✅ 也要能解析 ✅（否则 `from . import x` 回退 ✅）
+                package=module_name.rpartition(".")[0],
             )
             gen.emit_binding()
             for body_stmt in built.get("body", []):
@@ -475,7 +480,10 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     if module_stmts:
         try:
             module_ir = builder.build_module(ast.Module(body=module_stmts, type_ignores=[]))
-            module_gen = codegen.FunctionGen("<module>", None, [], Scope(name="<module>"), consts)
+            module_gen = codegen.FunctionGen(
+            "<module>", None, [], Scope(name="<module>"), consts,
+            package=module_name.rpartition(".")[0],
+        )
             for stmt in module_ir.get("body", []):
                 module_gen.emit_stmt(stmt)
         except Unsupported as exc:

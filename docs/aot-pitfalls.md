@@ -142,6 +142,15 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：`from ... import` / `global` / 非局部复合赋值 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 72 | 覆盖率体检发现**只有 12 个函数**被 AOT ✅（0.80 ✅），大量模块"0 个函数" ✅ | `_module_level_supported` **不认 `ast.ImportFrom`** ✅ -> 带 `from ... import ...` 的模块**整个**被跳过 ✅（真实代码几乎都有 ✅） | 支持 `ImportFrom` ✅（模块级 + 函数级 ✅、别名 ✅、相对导入按包名解析 ✅、`__future__` 当编译指令跳过 ✅）-> 12 → 171 个函数 ✅（0.929 ✅） |
+| 73 | 函数里 `from os.path import basename` 之后一调用就**访问违例** ✅（0xC0000005 ✅） | import 一律绑定到**模块字典** ✅ -> 函数局部变量永远是 NULL ✅ -> `PyObject_Vectorcall(NULL, ...)` ✅ | 加 `bind_name` ✅：是局部就写局部 ✅，否则写模块字典 ✅ |
+| 74 | `global X` 的函数仍然回退 ✅ | subset 里一条"不支持"✅（其实作用域分析早就把 global 名字从局部剔除了 ✅） | 删掉那条限制 ✅；`global`/`nonlocal` 建成 `noop` 节点 ✅（运行期无动作 ✅） |
+| 75 | `obj.attr += x` / `d[k] += v` 回退 ✅ | codegen 只实现了"局部变量"的复合赋值 ✅ | 非局部目标展开成「读 ✅ + 算 ✅ + 写 ✅」（读/写各一次 ✅，与 CPython 一致 ✅） |
+
 ## 追加：构建日志与控制台编码 ✅
 
 | # | 现象 | 根因 | 修法 |
