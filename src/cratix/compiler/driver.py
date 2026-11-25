@@ -606,14 +606,20 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     inner_gens: list = []
     inner_sites: dict = {}
     inner_cells: dict = {}
+    # **模块级控制流里的 def 节点** ✅（它们的体里还可能再嵌套 ✅ —— 扫描要用 ✅）
+    mdef_nodes: list = []
+    # **扫描"谁里面可能有嵌套 def"** ✅ —— 顶层函数 ✅ 类方法 ✅
+    # **以及模块级控制流里的 def** ✅（它们自己的体里也可能再嵌套 ✅ —— 实测踩过 ✅）
+    _owners: list = []
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef):
-            func_nodes = [stmt]
+            _owners.append(stmt)
         elif isinstance(stmt, ast.ClassDef):
-            func_nodes = [e for e in stmt.body if isinstance(e, ast.FunctionDef)]
-        else:
-            continue
-        for func_node in func_nodes:
+            _owners.extend(entry for entry in stmt.body if isinstance(entry, ast.FunctionDef))
+    for _node in mdef_nodes:
+        _owners.append(_node)
+    if True:
+        for func_node in _owners:
             outer = analyze_function(func_node, module_globals)
             # **受控流里包着的嵌套 def 也算** ✅（`if`/`for`/`with`/`try` 里面定义的 ✅）
             for child in _nested_defs(func_node):
@@ -706,6 +712,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 continue
             name = "_cratix_mdef_" + str(len(mdef_names))
             mdef_names[key] = {"name": name, "public": child.name}
+            mdef_nodes.append(child)
             lambda_names[key] = name
             lambda_captures[key] = []
             lambda_gens.append((name, built, []))
