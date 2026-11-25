@@ -62,9 +62,11 @@ class AotBuildTest(unittest.TestCase):
                     getattr(aot, name)(*args),
                     name + " 的 AOT 结果与源码不一致",
                 )
-        # 被拒绝的函数不进产物 ✅（containers 用星号解包 ✅）
+        # **函数级回退** ✅：不支持的函数仍进产物 ✅（由解释器执行 ✅）
         self.assertIn("containers", mc.fallback_names)
-        self.assertFalse(hasattr(aot, "containers"))
+        self.assertTrue(hasattr(aot, "containers"), "回退函数也应出现在产物里")
+        # 回退函数的���为仍要与源码一致 ✅
+        self.assertEqual(source.containers([1, 2, 3]), aot.containers([1, 2, 3]))
 
     def test_02_unsupported_functions_are_planned_as_fallback(self):
         mc = driver.compile_module(CORPUS / "corpus_unsupported.py", "cratix_corpus_unsupported")

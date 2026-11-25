@@ -29,23 +29,26 @@ def c_ident(name: str) -> str:
 
 
 def c_string(text: str) -> str:
-    """字符串字面量 -> C 字符串 ✅（转义 ✅）。"""
+    """字符串字面量 -> C 字符串 ✅（按 **UTF-8 字节**转义 ✅）。
+
+    **用八进制转义** ✅（\\NNN ✅）而不是 \\xNN ✅ —— 后者后面紧跟十六进制字符时会歧义 ✅。
+    """
     out = ["\""]
-    for ch in text:
-        if ch == "\\":
+    for byte in text.encode("utf-8"):
+        if byte == 0x5C:
             out.append("\\\\")
-        elif ch == chr(34):
+        elif byte == 0x22:
             out.append("\\" + chr(34))
-        elif ch == chr(10):
+        elif byte == 0x0A:
             out.append("\\n")
-        elif ch == chr(13):
+        elif byte == 0x0D:
             out.append("\\r")
-        elif ch == chr(9):
+        elif byte == 0x09:
             out.append("\\t")
-        elif ord(ch) < 32 or ord(ch) > 126:
-            out.append("\\x%02x" % ord(ch))
+        elif 0x20 <= byte <= 0x7E:
+            out.append(chr(byte))
         else:
-            out.append(ch)
+            out.append("\\%03o" % byte)
     out.append("\"")
     return "".join(out)
 
@@ -171,7 +174,8 @@ def module_body_parts(gen: FunctionGen):
 
 
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
-                                 key_names: list, module_gen=None, alias_init: str | None = None) -> str:
+                                 key_names: list, module_gen=None, alias_init: str | None = None,
+                                 fallback_code: dict | None = None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -186,6 +190,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("/* 由 cratix AOT 编译器生成 —— 请勿手改 ✅ */")
     out.append("#include <Python.h>")
     out.append("#include " + q + "cratix_runtime.h" + q)
+
     out.append("")
     out.append("static PyObject *cratix_globals = NULL;")
     out.append("static PyObject *cratix_builtins = NULL;")
@@ -242,6 +247,30 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("    NULL, NULL, NULL")
     out.append("};")
     out.append("")
+    # --- 函数级回退 ✅：内嵌 marshal 后的 code object ✅ ---
+    # --- 函数级回退 ✅：内嵌**函数源码** ✅ ---
+    # 运行期用 `Py_CompileString()` 编译 ✅（公开稳定 API ✅ —— 避开 marshal 的 C API ✅）。
+    fallback_code = fallback_code or {}
+    if fallback_code:
+        out.append("typedef struct {")
+        out.append("    const char *name;")
+        out.append("    const char *source;")
+        out.append("    const char *filename;")
+        out.append("} cratix_fb_entry;")
+        out.append("")
+        out.append("static const cratix_fb_entry cratix_fallbacks[] = {")
+        for name in sorted(fallback_code):
+            item = fallback_code[name]
+            out.append(
+                "    {" + q + name + q + ", "
+                + c_string(item.get("source", ""))
+                + ", "
+                + c_string(item.get("filename", "<cratix>"))
+                + "},",
+            )
+        out.append("    {NULL, NULL, NULL}")
+        out.append("};")
+        out.append("")
     out.append("PyMODINIT_FUNC " + init_symbol + "(void) {")
     # **PyModule_New + AddFunctions + SetModuleDef** ✅ ——
     # PyModuleDef_Init 在 3.14 返回 **def 实例** ✅（不是模块 ✅）；
@@ -254,6 +283,18 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **不设 m_def** ✅ —— `PyModule_SetModuleDef` 在 3.14 **没有导出** ✅（实测 ✅）；
     # 我们也不需要 ✅ —— 引导模块对 exec_done 的记录**不会**调 exec_def ✅。
     out.append("    if (cratix_run_body(m) < 0) { Py_DECREF(m); return NULL; }")
+    # --- 函数级回退 ✅：从内嵌字节码重建函数 ✅（globals = 模块字典 ✅）---
+    if fallback_code:
+        out.append("    for (int i = 0; cratix_fallbacks[i].name != NULL; i++) {")
+        # **在模块字典里 exec** ✅ —— 这样函数的 __globals__ 就是模块字典 ✅
+        # （模块级名字才能被函数体看到 ✅）；函数会自然落到模块字典里 ✅。
+        out.append("        PyObject *code = Py_CompileString(cratix_fallbacks[i].source, cratix_fallbacks[i].filename, Py_file_input);")
+        out.append("        if (code == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        PyObject *res = PyEval_EvalCode(code, cratix_globals, cratix_globals);")
+        out.append("        Py_DECREF(code);")
+        out.append("        if (res == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        Py_DECREF(res);")
+        out.append("    }")
     out.append("    return m;")
     out.append("}")
     if alias_init:
@@ -272,6 +313,7 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
     out.append("/* 由 cratix AOT 编译器生成 —— 请勿手改 ✅ */")
     out.append("#include <Python.h>")
     out.append("#include " + q + "cratix_runtime.h" + q)
+
     out.append("")
     out.append("static PyObject *cratix_globals = NULL;")
     out.append("static PyObject *cratix_builtins = NULL;")

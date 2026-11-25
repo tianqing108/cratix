@@ -36,6 +36,7 @@ class ModuleCompile:
     c_source: str = ""
     functions: list = field(default_factory=list)
     plans: list = field(default_factory=list)
+    fallback_code: dict = field(default_factory=dict)
     module_ok: bool = True
     module_reason: str = ""
     key_names: list = field(default_factory=list)
@@ -49,6 +50,28 @@ class ModuleCompile:
     def fallback_names(self) -> list:
         return [p.name for p in self.plans if not p.supported]
 
+
+
+
+def _module_code_objects(source: str, filename: str) -> dict:
+    """编译整个模块 ✅ 并取出顶层函数的 code object ✅（marshal 后的字节 ✅）。
+
+    失败（编译错误 ✅）→ 返回空表 ✅（该模块整体回退 ✅）。
+    """
+    import marshal
+
+    try:
+        module_code = compile(source, filename, "exec")
+    except Exception:  # noqa: BLE001 - 语法错误 ✅ 由上层处理 ✅
+        return {}
+    out: dict = {}
+    for const in module_code.co_consts:
+        if isinstance(const, type(module_code)) and const.co_name not in out:
+            try:
+                out[const.co_name] = marshal.dumps(const)
+            except Exception:  # noqa: BLE001
+                continue
+    return out
 
 def init_symbol_for(module_name: str) -> str:
     """唯一的 init 符号 ✅（PyInit_<末段> 会被同名模块冲突 ✅ —— 用哈希 ✅）。"""
@@ -118,6 +141,9 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
 
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
+    # **函数级回退的字节码来源** ✅：编译整个模块 ✅ 从 co_consts 里取函数 code object ✅
+    # （比"抠源码再编译"稳 ✅ —— 行号/闭包/默认值都保真 ✅）
+    # 保留 helper ✅（未来可用于字节码级回退 ✅）—— 当前用**内嵌源码** ✅
     for stmt in tree.body:
         if not isinstance(stmt, ast.FunctionDef):
             continue
@@ -131,6 +157,20 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
                 gen.emit_stmt(body_stmt)
         except Unsupported as exc:
             result.plans.append(FunctionPlan(stmt.name, False, exc.reason))
+            # **函数级回退** ✅：把该函数的 code object marshal 后内嵌 ✅
+            # → 运行期由 PyEval_EvalCode 执行 ✅（真 frame ✅ 真 traceback ✅ 语义等同源码 ✅）。
+            # **内嵌函数源码** ✅（运行期 Py_CompileString 编译 ✅）——
+            # 比内嵌 code object 简单 ✅（避开 marshal 的 C API ✅）且可读 ✅。
+            segment = None
+            try:
+                segment = ast.get_source_segment(source, stmt)
+            except Exception:  # noqa: BLE001
+                segment = None
+            if segment:
+                result.fallback_code[stmt.name] = {
+                    "source": segment,
+                    "filename": str(path),
+                }
             continue
         result.functions.append(gen)
         result.plans.append(FunctionPlan(stmt.name, True, ""))
@@ -161,6 +201,8 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
         result.functions,
         key_names,
         module_gen,
+        None,
+        result.fallback_code,
     )
     return result
 
