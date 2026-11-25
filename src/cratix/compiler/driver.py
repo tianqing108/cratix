@@ -301,6 +301,49 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         names = sorted(n for n in writes if n.isidentifier() and n not in ("self", "__class__"))
         class_slots_map[stmt.name] = {name: index for index, name in enumerate(names)}
 
+    # --- 闭包 ✅：函数里的嵌套 def ✅（cell 字典 + functools.partial ✅）---
+    inner_gens: list = []
+    inner_sites: dict = {}
+    inner_cells: dict = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef):
+            func_nodes = [stmt]
+        elif isinstance(stmt, ast.ClassDef):
+            func_nodes = [e for e in stmt.body if isinstance(e, ast.FunctionDef)]
+        else:
+            continue
+        for func_node in func_nodes:
+            outer = analyze_function(func_node, module_globals)
+            for child in func_node.body:
+                if not isinstance(child, ast.FunctionDef):
+                    continue
+                inner_scope = analyze_function(child, module_globals)
+                captured = inner_scope.free & outer.locals_
+                key = (getattr(child, "lineno", 0), getattr(child, "col_offset", 0))
+                if key in inner_sites:
+                    continue
+                # **`nonlocal` 写回** ✅ / 更深嵌套 ✅ -> 暂不支持 ✅（回退 ✅ 语义仍对 ✅）
+                writes = {sub.id for sub in ast.walk(child) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)}
+                if (writes & captured) or any(
+                    isinstance(sub, ast.FunctionDef) and sub is not child
+                    for sub in ast.walk(child)
+                ):
+                    continue
+                name = "_cratix_inner_" + str(len(inner_sites))
+                child._cratix_owner = func_node.name
+                inner_sites[key] = {
+                    "name": name,
+                    "def_name": child.name,
+                    "captures": sorted(captured),
+                }
+                inner_gens.append((name, child, captured))
+    # **按"外层函数名"登记** ✅ —— 生成外层时要告诉它"哪些名字住进 cell 字典" ✅
+    for _name, _node, _captured in inner_gens:
+        owner = getattr(_node, "_cratix_owner", None)
+        if owner is None:
+            continue
+        inner_cells.setdefault(owner, set()).update(_captured)
+
     # --- lambda ✅：先扫出来 ✅，编译成**模块级原生函数** ✅（使用点按名字取 ✅）---
     lambda_gens: list = []
     lambda_names: dict = {}
@@ -342,6 +385,48 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     # **常量池** ✅ —— 整模块一个 ✅（常量只建一次 ✅，循环里只 INCREF ✅）
     # const_pool=False 只用于 **A/B 基准对照** ✅（产品路径永远开 ✅）
     consts = codegen.ConstantPool() if const_pool else None
+    # **嵌套 def 也先生成** ✅（模块级原生函数 ✅；捕获的变量作为**隐藏首参** `_cratix_cells` ✅）
+    for inner_name, inner_node, inner_captured in inner_gens:
+        inner_built = builder.build_function(inner_node)
+        raw_params = inner_built["params"]
+        # **隐藏首参 = cell 字典** ✅（`functools.partial` 会把它绑在前面 ✅）——
+        # 没有捕获时**不加** ✅（否则用户参数会错位 ✅ -> "missing required argument" ✅ 实测 ✅）
+        hidden = ["_cratix_cells"] if inner_captured else []
+        inner_params = {
+            "names": hidden + list(raw_params.get("names", [])),
+            "defaults": list(raw_params.get("defaults", [])),
+            "kwonly": list(raw_params.get("kwonly", [])),
+            "kwdefaults": list(raw_params.get("kwdefaults", [])),
+            "vararg": raw_params.get("vararg"),
+            "kwarg": raw_params.get("kwarg"),
+        }
+        inner_scope = analyze_function(inner_node, module_globals)
+        inner_scope.free = inner_scope.free - set(inner_captured)
+        # **隐藏首参也是局部变量** ✅ —— 不登记的话 C 里不会声明这个变量 ✅
+        if inner_captured:
+            inner_scope.locals_ = set(inner_scope.locals_) | {"_cratix_cells"}
+        try:
+            inner_gen = codegen.FunctionGen(
+                inner_name, inner_params, inner_built["body"], inner_scope, consts,
+                lambda_names=lambda_names,
+                inner_sites=inner_sites,
+                closure_names=set(inner_captured),
+                package=module_name.rpartition(".")[0],
+            )
+            inner_gen.emit_binding()
+            inner_gen.emit_cells_init()
+            for inner_stmt in inner_built["body"]:
+                inner_gen.emit_stmt(inner_stmt)
+        except Unsupported as exc:
+            result.plans.append(FunctionPlan(inner_name, False, exc.reason))
+            continue
+        result.functions.append(inner_gen)
+        for pname in list(inner_params.get("names", [])) + list(inner_params.get("kwonly", [])):
+            key_names.append(pname)
+        key_names.extend(sorted(inner_gen.global_names))
+        result.genexp_sources.update(inner_gen.genexp_sources)
+        result.plans.append(FunctionPlan(inner_name, True, ""))
+
     # **lambda 先生成** ✅ —— 它们是模块级函数 ✅，函数体里只按名字取 ✅
     for lam_name, built_lambda in lambda_gens:
         lam_params = built_lambda["params"]
@@ -358,6 +443,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 package=module_name.rpartition(".")[0],
             )
             lam_gen.emit_binding()
+            lam_gen.emit_cells_init()
             for lam_stmt in built_lambda["body"]:
                 lam_gen.emit_stmt(lam_stmt)
         except Unsupported as exc:
@@ -395,8 +481,11 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **函数里的相对导入** ✅ 也要能解析 ✅（否则 `from . import x` 回退 ✅）
                 package=module_name.rpartition(".")[0],
                 lambda_names=lambda_names,
+                cell_names=inner_cells.get(stmt.name, set()),
+                inner_sites=inner_sites,
             )
             gen.emit_binding()
+            gen.emit_cells_init()
             for body_stmt in built.get("body", []):
                 gen.emit_stmt(body_stmt)
         except Unsupported as exc:
@@ -504,8 +593,11 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         known_classes=class_slots_map,
                         enclosing_class=stmt.name,
                         lambda_names=lambda_names,
+                        cell_names=inner_cells.get(item.name, set()),
+                        inner_sites=inner_sites,
                     )
                     gen.emit_binding()
+                    gen.emit_cells_init()
                     for body_stmt in built.get("body", []):
                         gen.emit_stmt(body_stmt)
                 except Unsupported as exc:

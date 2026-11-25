@@ -42,8 +42,9 @@ class FunctionFallbackTest(unittest.TestCase):
     def test_01_unsupported_functions_are_embedded(self):
         data = run_worker("fallback")
         # **global 现在能 AOT 了** ✅（只剩闭包与生成器回退 ✅）
-        self.assertEqual(data["fallback"], ["closure", "gen"])
-        self.assertEqual(data["embedded"], ["closure", "gen"])
+        # **闭包现在能 AOT 了** ✅（cell 字典 + functools.partial ✅）-> 只剩生成器回退 ✅
+        self.assertEqual(data["fallback"], ["gen"])
+        self.assertEqual(data["embedded"], ["gen"])
 
     def test_02_try_except_is_supported(self):
         data = run_worker("try")
@@ -95,7 +96,8 @@ class FunctionFallbackTest(unittest.TestCase):
     def test_06_decorators_and_property(self):
         data = run_worker("decorators")
         # 装饰器函数本身回退 ✅（体内有嵌套 def ✅）；被装饰的函数也回退 ✅（PyCFunction 没有 __dict__ ✅）
-        self.assertEqual(data["fallback"], ["composed", "double", "tag", "twice"])
+        # **装饰器里的闭包也能 AOT 了** ✅ -> 只剩"模块级装饰器"的函数回退 ✅
+        self.assertEqual(data["fallback"], ["composed", "twice"])
         # 类方法全部 AOT 化 ✅（含 @property / @staticmethod / @classmethod / 自定义装饰器 ✅）
         for name in ("doubled", "label", "helper", "build", "scaled", "plain"):
             self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
@@ -205,7 +207,8 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(values["nested"], "inner|fin-inner|caught|fin-outer")
         self.assertEqual(values["value_after"], 44)
         # 只有"带嵌套 def"的那个回退 ✅（闭包不支持 ✅）
-        self.assertEqual(data["fallback"], ["with_return"])
+        # 嵌套 def 不再需要回退 ✅（没有捕获 ✅）
+        self.assertEqual(data["fallback"], [])
 
     def test_13_imports_globals_augassign(self):
         """`from ... import` ✅ / `global` ✅ / 非局部复合赋值 ✅ —— 真实代码最常见的三件事 ✅。"""
@@ -232,6 +235,18 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["with_global"], 11)
         self.assertEqual(data["captures"], [11, 12])
         self.assertEqual(data["nested"], [3, 6])
+
+    def test_15_closures(self):
+        """闭包 ✅ —— cell 字典 + functools.partial ✅；**晚绑定**必须正确 ✅。"""
+        data = run_worker("closures")
+        for name in ("make_adder", "counter_factory", "uses_before_after", "with_loop", "no_capture"):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        self.assertEqual(data["adder"], 15)
+        self.assertEqual(data["counter"], 107)
+        # **晚绑定** ✅：limit 从 10 改成 3 之后，同一个闭包看到的是新值 ✅
+        self.assertEqual(data["late"], [3, 2])
+        self.assertEqual(data["loop"], 4)
+        self.assertEqual(data["plain"], [2, 4])
 
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")

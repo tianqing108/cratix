@@ -77,7 +77,9 @@ def check_function(node: ast.FunctionDef, scope) -> None:
             raise Unsupported(reason)
         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Del):
             raise Unsupported("del 语句")
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:
+        # **嵌套 def** ✅ 已支持 ✅（cell 字典 + functools.partial ✅）；
+        # 没登记的嵌套 def 会在 codegen 里被判回退 ✅（语义仍正确 ✅）。
+        if isinstance(child, (ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:
             raise Unsupported("嵌套定义（" + type(child).__name__ + "）")
         # **lambda** ✅ 已支持 ✅（无条件/无捕获的编译成原生函数 ✅；
         # 捕获外层局部的在 codegen 里判定回退 ✅）。

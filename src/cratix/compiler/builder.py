@@ -145,9 +145,12 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             names.append((alias.name, alias.asname))
         return ir.node("importfrom", module=node.module or "", level=node.level, names=names)
     if isinstance(node, ast.FunctionDef):
+        # **嵌套 def** ✅：在函数体里出现时，codegen 会按 (行, 列) 查登记表 ✅
+        # （模块级/类方法由 driver 处理 ✅，不走这里 ✅）。
         flags = ("async", bool(node.decorator_list))
         return ir.node(
             "funcdef",
+            key=(getattr(node, "lineno", 0), getattr(node, "col_offset", 0)),
             name=node.name,
             params=build_params(node.args),
             flags=flags,
@@ -199,6 +202,14 @@ def _fold(op: str, left, right):
     except Exception:  # noqa: BLE001 - 折叠失败就放弃折叠 ✅（语义交给运行期 ✅）
         return None
     return None
+
+
+def build_function(node: ast.FunctionDef) -> dict:
+    """把一个 FunctionDef 建成「参数 + 语句表」✅（嵌套 def 复用 ✅）。"""
+    return {
+        "params": build_params(node.args),
+        "body": [build_stmt(stmt) for stmt in node.body],
+    }
 
 
 def build_lambda(node: ast.Lambda) -> dict:

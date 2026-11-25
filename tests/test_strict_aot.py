@@ -45,18 +45,16 @@ def main():
     print("strict demo", helper(21))
 '''
 
-CLOSURE_MAIN = '''"""含闭包：必然回退 ✅。"""
+GENERATOR_MAIN = '''"""含生成器函数：必然回退 ✅。"""
 
 
-def make_adder(step):
-    def adder(value):
-        return value + step
-
-    return adder
+def counting(n):
+    for i in range(n):
+        yield i
 
 
 def main():
-    print("strict demo", make_adder(1)(2))
+    print("strict demo", sum(counting(3)))
 '''
 
 
@@ -111,7 +109,7 @@ class StrictAotTest(unittest.TestCase):
     def test_fallback_fails_the_build(self):
         tmp = _workdir()
         try:
-            config = _make_project(tmp, CLOSURE_MAIN, strict=True)
+            config = _make_project(tmp, GENERATOR_MAIN, strict=True)
             cfg = load_config(config)
             outcome = build(cfg, log=lambda *_a, **_k: None)
             self.assertFalse(outcome.ok, "有函数回退时严格模式必须失败")
@@ -123,7 +121,7 @@ class StrictAotTest(unittest.TestCase):
     def test_non_strict_project_still_succeeds_with_fallback(self):
         tmp = _workdir()
         try:
-            config = _make_project(tmp, CLOSURE_MAIN, strict=False)
+            config = _make_project(tmp, GENERATOR_MAIN, strict=False)
             cfg = load_config(config)
             outcome = build(cfg, log=lambda *_a, **_k: None)
             self.assertTrue(outcome.ok, outcome.error)

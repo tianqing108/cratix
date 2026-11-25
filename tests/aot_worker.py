@@ -143,6 +143,20 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_closures(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_closures.py", "cratix_corpus_closures", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "adder": mod.make_adder(5)(10),
+        "counter": mod.counter_factory(100)(7),
+        "late": list(mod.uses_before_after([1, 2, 5, 20])),
+        "nested": mod.nested_call([1, 2, 3]),
+        "loop": mod.with_loop(4),
+        "plain": mod.no_capture([1, 2]),
+    }
+
+
 def op_lambda(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_lambda.py", "cratix_corpus_lambda", out_dir)
     return {
@@ -352,6 +366,8 @@ def main() -> int:
             data = op_extras(out_dir)
         elif op == "lambda":
             data = op_lambda(out_dir)
+        elif op == "closures":
+            data = op_closures(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

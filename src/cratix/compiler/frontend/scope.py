@@ -42,8 +42,25 @@ class _ScopeAnalyzer(ast.NodeVisitor):
         self.nonlocals: set = set()
 
     def visit_FunctionDef(self, node):
+        """**嵌套 def** ✅ —— 它自己的形参/局部**不是**外层函数的读 ✅。
+
+        以前直接 generic_visit ✅ -> 内层形参被算成外层"读" ✅ ->
+        外层被判"闭包捕获" ✅ 整函数回退 ✅（内层其实已经能编译 ✅）。
+        """
         self.bound.add(node.name)
+        params = set()
+        args = node.args
+        for arg in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
+            params.add(arg.arg)
+        if args.vararg:
+            params.add(args.vararg.arg)
+        if args.kwarg:
+            params.add(args.kwarg.arg)
+        before_reads = set(self.reads)
+        before_bound = set(self.bound)
         self.generic_visit(node)
+        # 内层**新读到**的形参名 / 内层**新绑定**的名字都不算外层的读 ✅
+        self.reads -= (params - before_reads) | (self.bound - before_bound)
 
     visit_AsyncFunctionDef = visit_FunctionDef
 

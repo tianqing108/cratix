@@ -112,7 +112,8 @@ class GoldenModelTest(unittest.TestCase):
     def test_unsupported_are_rejected(self):
         path = CORPUS / "corpus_unsupported.py"
         tree = diff.module_tree(path)
-        for name in ("gen", "closure", "uses_global"):
+        # **closure 现在支持了** ✅（cell 字典 ✅）-> 只剩生成器 ✅
+        for name in ("gen", "uses_global"):
             supported, reason = diff.classify(tree, name)
             # **global 已支持** ✅（作用域名从局部剔除 ✅，赋值走模块字典 ✅）
             if name in ("uses_global",):

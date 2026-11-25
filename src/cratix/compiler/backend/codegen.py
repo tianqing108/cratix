@@ -430,6 +430,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("    if (cratix_builtins_module == NULL) return -1;")
     out.append("    cratix_builtins = PyModule_GetDict(cratix_builtins_module);")
     out.append("    if (cratix_builtins == NULL) return -1;")
+    # **模块字典要有 __builtins__** ✅ —— exec/eval 源码时（回退函数 ✅/跳板 ✅/lambda ✅）
+    # CPython 会去 globals 找它 ✅；没有就往上找帧 ✅ -> 没有帧时 `KeyError: '__builtins__'` ✅（实测 ✅）
+    out.append("    if (PyDict_SetItemString(cratix_globals, \"__builtins__\", cratix_builtins) < 0) return -1;")
     for key in sorted(set(key_names)):
         out.append("    cratix_key_" + c_ident(key) + " = PyUnicode_InternFromString(" + q + key + q + ");")
         out.append("    if (cratix_key_" + c_ident(key) + " == NULL) return -1;")
@@ -892,11 +895,17 @@ class FunctionGen:
 
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
                  class_methods=None, self_attr_writes=None, method_mode=False,
-                 known_classes=None, enclosing_class=None, package="", lambda_names=None):
+                 known_classes=None, enclosing_class=None, package="", lambda_names=None,
+                 cell_names=None, inner_sites=None, closure_names=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
         self.lambda_names = dict(lambda_names or {})
+        # **闭包** ✅：本函数里"住在 cell 字典里"的局部 ✅ / 嵌套 def 的登记表 ✅ / 自己捕获的名字 ✅
+        self.cell_names = set(cell_names or ())
+        self.inner_sites = dict(inner_sites or {})
+        self.closure_names = set(closure_names or ())
+        self.cells_var = ""
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
         self.method_mode = bool(method_mode)
@@ -1151,6 +1160,53 @@ class FunctionGen:
         self.emit("    if (" + ref + " == NULL) goto cratix_error;")
         self.emit("}")
 
+    def emit_cells_init(self) -> None:
+        """**cell 字典** ✅ —— 被内层函数捕获的局部变量放这里 ✅（内层按名字读 ✅ 晚绑定 ✅）。"""
+        if not self.cell_names:
+            return
+        self.cells_var = self.new_tmp()
+        self.emit(self.cells_var + " = PyDict_New();")
+        self.emit("if (" + self.cells_var + " == NULL) goto cratix_error;")
+        # **只预置"参数"** ✅ —— 函数体里赋值的名字此刻还是 NULL ✅，
+        # 往字典里塞 NULL 会直接崩 ✅（实测：访问违例 ✅）；它们的值由**赋值路径**镜像进去 ✅。
+        for name in sorted(self.cell_names & set(self.scope.params)):
+            var = self.local_var(name)
+            self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", " + var + ") < 0) goto cratix_error;")
+
+    def emit_inner_def(self, node) -> None:
+        """**嵌套 def** ✅ —— 取模块级原生函数 ✅，有捕获就 `functools.partial(fn, cells)` ✅。"""
+        site = self.inner_sites.get(node.get("key"))
+        if site is None:
+            raise Unsupported("嵌套定义（未登记）")
+        fn = self.new_tmp()
+        self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(site["name"]) + ");")
+        self.emit("if (" + fn + " == NULL) {")
+        self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: closure helper missing\");")
+        self.emit("    goto cratix_error;")
+        self.emit("}")
+        value = self.new_tmp()
+        if site["captures"]:
+            if not self.cells_var:
+                raise Unsupported("嵌套定义捕获了变量但没有 cell 字典")
+            fmod = self.new_tmp()
+            part = self.new_tmp()
+            self.emit(fmod + " = PyImport_ImportModule(\"functools\");")
+            self.emit("if (" + fmod + " == NULL) goto cratix_error;")
+            self.emit(part + " = PyObject_GetAttrString(" + fmod + ", \"partial\");")
+            self.emit("Py_DECREF(" + fmod + ");")
+            self.emit(fmod + " = NULL;")
+            self.emit("if (" + part + " == NULL) goto cratix_error;")
+            self.emit(value + " = PyObject_CallFunctionObjArgs(" + part + ", " + fn + ", " + self.cells_var + ", NULL);")
+            self.emit("Py_DECREF(" + part + ");")
+            self.emit(part + " = NULL;")
+            self.emit("if (" + value + " == NULL) goto cratix_error;")
+        else:
+            self.emit(value + " = Py_NewRef(" + fn + ");")
+        var = self.local_var(site["def_name"])
+        self.emit("Py_XDECREF(" + var + ");")
+        self.emit(var + " = " + value + ";")
+        self.emit(value + " = NULL;")
+
     def bind_name(self, name: str, value_var: str) -> None:
         """把 value_var（**所有权转移** ✅）绑到名字上 ✅ —— 局部写局部 ✅，否则写模块全局 ✅。
 
@@ -1391,6 +1447,9 @@ class FunctionGen:
                 var = self.local_var(name)
                 self.emit("Py_XDECREF(" + var + ");")
                 self.emit(var + " = " + value_var + ";")
+                if name in self.cell_names and self.cells_var:
+                    # **被内层捕获** ✅ -> 同步进 cell 字典 ✅
+                    self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", " + var + ") < 0) goto cratix_error;")
             else:
                 self.emit("if (PyDict_SetItemString(cratix_globals, " + c_string(name) + ", " + value_var + ") < 0) goto cratix_error;")
                 self.emit("Py_DECREF(" + value_var + ");")
@@ -1741,6 +1800,10 @@ class FunctionGen:
             return
         if kind == "pass" or kind == "noop":
             return
+        if kind == "funcdef":
+            # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）
+            self.emit_inner_def(node)
+            return
         if kind == "raise":
             t = self.emit_expr(node.kids[0])
             self.emit("cratix_raise(" + t + ");")
@@ -1918,6 +1981,16 @@ class FunctionGen:
             if comp_var is not None:
                 self.emit(t + " = " + comp_var + ";")
                 self.emit("Py_XINCREF(" + t + ");")
+                return t
+            if name in self.closure_names:
+                # **闭包自由变量** ✅ —— 从 cell 字典读 ✅（晚绑定 ✅）
+                cells = self.local_var("_cratix_cells")
+                self.emit(t + " = PyDict_GetItemString(" + cells + ", " + c_string(name) + ");")
+                self.emit("if (" + t + " == NULL) {")
+                self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: free variable not bound\");")
+                self.emit("    goto cratix_error;")
+                self.emit("}")
+                self.emit("Py_INCREF(" + t + ");")
                 return t
             if name in self.scope.locals_:
                 var = self.local_var(name)

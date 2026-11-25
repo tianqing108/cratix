@@ -37,7 +37,7 @@ KIND_FIELDS = {
     "try": ("body", "handlers", "orelse", "finalbody"),
     "handler": ("name", "type"),              # kids: [body...]
     "with": ("body",),                       # kids: [ctx, vars|None] 成对 ✅
-    "funcdef": ("name", "params", "flags", "body"),
+    "funcdef": ("name", "params", "flags", "body", "key"),
     "classdef": ("name", "bases", "body"),
     # --- 参数 ---
     "params": ("names", "defaults", "kwdefaults", "kwonly", "vararg", "kwarg"),
