@@ -29,7 +29,7 @@ UNSUPPORTED_NODES = {
     # 类定义单独校验 ✅（见 check_class ✅）
 
     # ast.Match：已支持 ✅（字面量/单例/捕获/通配/或 + guard ✅；结构模式回退 ✅）
-    ast.Nonlocal: "nonlocal 声明",
+    # ast.Nonlocal：只读已支持 ✅（写回在 driver 里拒 ✅）
     # ast.Delete：**已支持** ✅（只支持删名字 ✅ —— 见下面的细化检查 ✅）
     # **`from ... import ...`** ✅ 已支持 ✅（模块级/函数级同一套生成 ✅）
 }
@@ -73,8 +73,7 @@ def check_function(node: ast.FunctionDef, scope) -> None:
     """
     if scope.has_closure:
         raise Unsupported("闭包捕获（自由变量：" + ", ".join(sorted(scope.free)[:6]) + "）")
-    if scope.nonlocals_:
-        raise Unsupported("nonlocal 声明")
+    # **`nonlocal` 只读** ✅ 已支持 ✅（读走 cell ✅）；**写回**由 driver 检查后回退 ✅
     for child in ast.walk(node):
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:

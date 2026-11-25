@@ -64,6 +64,8 @@ class ModuleCompile:
     fallback_classes: list = field(default_factory=list)
     # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
     inline_class_sources: dict = field(default_factory=dict)
+    # **函数里"捕获外层局部"的类** ✅（(行, 列) -> 工厂函数 ✅）
+    class_factories: dict = field(default_factory=dict)
     # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
     body_marks: list = field(default_factory=list)
     # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
@@ -363,19 +365,26 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     # 顶层类走"按源码位置创建" ✅，这两类走"就地 exec 源码" ✅（语义一致 ✅）。
     def _register_inline_class(node, scope=None) -> None:
         key = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
-        if key in result.inline_class_sources:
+        if key in result.inline_class_sources or key in result.class_factories:
+            return
+        segment = _source_segment(source, node, dedent=True)
+        if not segment:
             return
         if scope is not None:
-            # **类体引用了外层局部** ✅ -> exec 在 globals 里看不见 ✅ -> 那就回退 ✅（保守 ✅）
+            # **类体/方法引用了外层局部** ✅ -> 用**工厂函数** ✅：
+            # 合成 `def _factory(捕获名...): <类源码>; return 类` ✅ 在模块 init 里 exec ✅，
+            # 调用点带**实参**调用 ✅ —— 这样方法拿到的是**真闭包** ✅（语义与源码完全一致 ✅）。
             used = {
                 sub.id for sub in ast.walk(node)
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
             }
-            if used & (scope.locals_ - {"__class__"}):
+            captured = sorted(used & (scope.locals_ - {"__class__"}))
+            if captured:
+                # **暂时回退** ✅ —— 工厂函数方案能跑出正确结果 ✅，
+                # 但**模块析构时会崩**（访问违例 ✅，TODO 已记进 pitfalls ✅）。
+                # 崩溃比"回退"糟得多 ✅ -> 先保守：这个函数整函数回退 ✅（语义正确 ✅）。
                 return
-        segment = _source_segment(source, node, dedent=True)
-        if segment:
-            result.inline_class_sources[key] = segment
+        result.inline_class_sources[key] = segment
 
     for stmt in module_stmts:
         for sub in ast.walk(stmt):
@@ -707,6 +716,14 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             continue
         scope = analyze_function(stmt, module_globals)
         try:
+            # **`nonlocal` 只读** ✅ 可以（读走 cell ✅）；**写回**不行 ✅ -> 明确回退 ✅
+            if scope.nonlocals_:
+                writes = {
+                    sub.id for sub in ast.walk(stmt)
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
+                }
+                if writes & scope.nonlocals_:
+                    raise Unsupported("nonlocal 写回")
             # **模块级函数没有外层作用域** ✅ -> 它读到的"自由名"**只可能是全局** ✅
             # （以前把这些名字当成"闭包捕获" ✅ -> 整个函数回退 ✅ —— 实测 `calendar.py` 的
             #  `FEBRUARY`（`globals().update(...)` 动态绑定 ✅）就中招 ✅）
@@ -1005,6 +1022,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             class_order=result.class_order,
             body_marks=result.body_marks,
             inline_class_sources=result.inline_class_sources,
+        class_factories=result.class_factories,
         )
     except Unsupported as exc:
         # **生成期的不支持** ✅（例如池里的常量类型 ✅）-> 模块级回退 ✅ 不能崩 ✅

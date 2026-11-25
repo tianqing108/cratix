@@ -444,7 +444,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  consts=None, func_meta=None, genexps=None,
                                  decorated_functions=None, source_file="",
                                  fallback_classes=None, class_order=None,
-                                 body_marks=None, inline_class_sources=None) -> str:
+                                 body_marks=None, inline_class_sources=None,
+                                 class_factories=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -519,6 +520,13 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     for key in sorted(set(key_names)):
         out.append("    cratix_key_" + c_ident(key) + " = PyUnicode_InternFromString(" + q + key + q + ");")
         out.append("    if (cratix_key_" + c_ident(key) + " == NULL) return -1;")
+    # **类工厂** ✅（函数里"捕获外层局部"的类 ✅ —— 用工厂函数造出**真闭包** ✅）
+    for _key, factory in (class_factories or {}).items():
+        out.append("    {")
+        out.append("        PyObject *cratix_fac = PyRun_String(" + c_string(factory["source"]) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        if (cratix_fac == NULL) return -1;")
+        out.append("        Py_DECREF(cratix_fac);")
+        out.append("    }")
     # **生成器表达式的辅助函数** ✅ —— 必须在 `cratix_globals` 就绪**之后** ✅、
     # 模块体与类创建**之前** ✅（装饰器/模块体都可能用到 ✅）；
     # 放在 globals 之前实测报 "globals must be a real dict" ✅
@@ -1184,6 +1192,8 @@ class FunctionGen:
         self.match_index = 0
         # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
         self.inline_class_sources: dict = {}
+        # **类工厂** ✅（函数里捕获外层局部的类 ✅）
+        self.class_factories: dict = {}
         # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
         self.stmt_marks: list = []
         # **类信息** ✅：名字 -> {属性名: 槽位下标} ✅（属性快路径用 ✅）
@@ -2213,6 +2223,31 @@ class FunctionGen:
                     raise Unsupported("del 目标：" + target.kind)
             return
         if kind == "classdef":
+            factory = (self.class_factories or {}).get(node.get("key"))
+            if factory:
+                # **类工厂** ✅ —— 带实参调用 ✅ -> 方法拿到**真闭包** ✅
+                fn = self.new_tmp()
+                self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(factory["name"]) + ");")
+                self.emit("if (" + fn + " == NULL) { PyErr_SetString(PyExc_NameError, \"cratix: class factory missing\"); goto cratix_error; }")
+                fn_copy = self.new_tmp()
+                self.emit(fn_copy + " = Py_NewRef(" + fn + ");")
+                args = self.new_tmp()
+                self.emit(args + " = PyTuple_New(" + str(len(factory["captured"])) + ");")
+                self.emit("if (" + args + " == NULL) { Py_DECREF(" + fn_copy + "); goto cratix_error; }")
+                for index, cap in enumerate(factory["captured"]):
+                    value = self.local_var(cap)
+                    self.emit("Py_XINCREF(" + value + ");")
+                    self.emit("PyTuple_SET_ITEM(" + args + ", " + str(index) + ", " + value + ");")
+                result_tmp = self.new_tmp()
+                self.emit(result_tmp + " = PyObject_Call(" + fn_copy + ", " + args + ", NULL);")
+                self.emit("Py_DECREF(" + args + ");")
+                self.emit("Py_DECREF(" + fn_copy + ");")
+                self.emit("if (" + result_tmp + " == NULL) goto cratix_error;")
+                var = self.local_var(factory["class_name"])
+                self.emit("Py_XDECREF(" + var + ");")
+                self.emit(var + " = " + result_tmp + ";")
+                self.emit(result_tmp + " = NULL;")
+                return
             # **就地 exec 的类** ✅（模块体控制流里 / 函数体里 ✅）——
             # exec 到模块字典会绑定**全局** ✅ -> 在函数里必须再搬进**局部**并删掉全局 ✅（语义一致 ✅）
             source_text = (self.inline_class_sources or {}).get(node.get("key"))
