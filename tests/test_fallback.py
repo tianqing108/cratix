@@ -288,8 +288,8 @@ class FunctionFallbackTest(unittest.TestCase):
         """**模块级语句** ✅（if/try/expr/del ✅）+ **类级回退** ✅（继承的类走源码 ✅）。"""
         data = run_worker("module_level")
         self.assertTrue(data["module_ok"])
-        # 继承的类不回退整个模块 ✅ —— 只是这个类走源码 exec ✅
-        self.assertTrue(data["fallback_classes"], "继承的类应当走类级回退")
+        # **继承的类现在直接 AOT 了** ✅（单基类 ✅ + 非槽位布局 ✅）
+        self.assertEqual(data["fallback_classes"], [], "单基类继承不该再走类级回退")
         for name in ("limit_value", "registry_size", "raise_and_catch", "basename_of", "drop_temp"):
             self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
         self.assertEqual(data["limit"], 10)
@@ -299,6 +299,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["base_ok"], "b.txt")
         self.assertEqual(data["dropped"], "dropped")
         self.assertTrue(data["temp_gone"], "del 之后全局应当真的没了")
+
+    def test_20_inheritance(self):
+        """**继承** ✅：内置基类 / 自定义基类 ✅，零参 `super()` 也要对 ✅。"""
+        data = run_worker("inherit")
+        self.assertEqual(data["fallback"], [], "继承的类与 super() 都应能 AOT")
+        self.assertEqual(data["raised"], "E5")
+        self.assertEqual(data["total"], 7)
+        self.assertEqual(data["label"], "base-child")
+        self.assertTrue(data["is_exc"], "AppError 必须真的是 Exception 的子类")
+        # **基类的 __init__ 真的跑过** ✅（args 由 Exception.__init__ 设 ✅）
+        self.assertEqual(data["exc_args"], ["bad 9"])
 
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")

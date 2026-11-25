@@ -330,6 +330,10 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     for stmt in tree.body:
         if not isinstance(stmt, ast.ClassDef):
             continue
+        # **继承的类不做槽位** ✅（布局是基类的 ✅ -> 按偏移读写会越界 ✅）
+        if stmt.bases or getattr(stmt, "keywords", None):
+            class_slots_map[stmt.name] = {}
+            continue
         writes = set()
         for entry in stmt.body:
             if not isinstance(entry, ast.FunctionDef):
@@ -692,8 +696,18 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             entry.name for entry in stmt.body
             if isinstance(entry, ast.FunctionDef) and not entry.decorator_list
         ]
+        # **继承** ✅：非 object 基类 -> 类**不用槽位** ✅（实例布局由基类决定 ✅），
+        # 创建走 `type(name, (Base,), ns)` ✅（这样 `slot_tp_init` 才会调我们的 `__init__` ✅）。
+        inherited = bool(stmt.bases) or bool(getattr(stmt, "keywords", None))
+        # **基类表达式里的名字要 intern** ✅（`cratix_key_v_Exception` ✅ —— 生成基类表达式时要用 ✅）
+        if stmt.bases:
+            for sub in ast.walk(stmt.bases[0]):
+                if isinstance(sub, ast.Name):
+                    key_names.append(sub.id)
         class_info = {
             "name": stmt.name,
+            "inherited": inherited,
+            "base": builder.build_expr(stmt.bases[0]) if stmt.bases else None,
             "doc": _doc_of(stmt),
             "descriptor_methods": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）

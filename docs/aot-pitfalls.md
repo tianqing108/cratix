@@ -142,6 +142,15 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：继承内置类 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 100 | 继承的类一创建就 `ValueError: PyObject is NULL` ✅ | 生成的 make 函数里，`cratix_error:` 标签写在了 `return 0;` **之前** ✅ -> 成功路径也 fall through 到 `return -1` ✅ | `return 0;` 在前 ✅、错误标签在后 ✅（每个类单独记住"有没有错误标签" ✅） |
+| 101 | 继承类的 `__init__` 不被调用 ✅ | `PyType_FromSpec` 给的是我们的 `tp_init` ✅；换成 `type()` 创建才有 `slot_tp_init` ✅（它会去查 `__init__` ✅） | 继承类一律走 `type(name, (Base,), ns)` ✅，并且**不做槽位** ✅（布局是基类的 ✅） |
+| 102 | `super()` 报 `RuntimeError: super(): no arguments` ✅ | 零参 `super()` 依赖编译器生成的 `__class__` cell ✅，我们的函数里没有 ✅ | 在方法里把它改写成 `super(本类, self)` ✅（`cratix_type_<类名>` 静态量 ✅ + `self` ✅） |
+| 103 | 基类表达式里的名字没 intern ✅ -> `cratix_key_v_Exception` 未声明 ✅ | 基类表达式是**运行时**求值的 ✅，它的全局名也要进 key 表 ✅ | driver 在建类时把基类表达式里的 Name 也加进 `key_names` ✅ |
+
 ## 追加：类按源码位置创建 ✅
 
 | # | 现象 | 根因 | 修法 |

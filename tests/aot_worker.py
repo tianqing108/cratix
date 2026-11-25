@@ -143,6 +143,19 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_inherit(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_inherit.py", "cratix_corpus_inherit", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "raised": mod.raise_app(5),
+        "total": mod.child_total(3),
+        "label": mod.child_label(1),
+        "is_exc": mod.is_exception(),
+        "exc_args": list(mod.AppError(9).args),
+    }
+
+
 def op_module_level(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_module_level.py", "cratix_corpus_module_level", out_dir)
     return {
@@ -438,6 +451,8 @@ def main() -> int:
             data = op_unpack(out_dir)
         elif op == "module_level":
             data = op_module_level(out_dir)
+        elif op == "inherit":
+            data = op_inherit(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

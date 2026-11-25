@@ -36,14 +36,13 @@ UNSUPPORTED_NODES = {
 
 
 def check_class(node: ast.ClassDef) -> None:
-    """检查类定义 ✅（v1 只支持简单的 object 子类 ✅）。
+    """检查类定义 ✅。
 
-    **不支持** → 抛 Unsupported ✅（整个模块回退 .pyc ✅ —— 类是模块级结构 ✅）。
+    **继承** ✅：支持**单个基类** ✅（实例布局由基类决定 ✅ -> 这类类**不做属性槽位** ✅，
+    创建走 `type(name, (Base,), ns)` ✅）。多基类 / metaclass 仍不支持 ⬜。
     """
-    for base in node.bases:
-        if isinstance(base, ast.Name) and base.id == "object":
-            continue
-        raise Unsupported("继承非 object 基类（" + type(base).__name__ + "）")
+    if len(node.bases) > 1:
+        raise Unsupported("多基类继承（" + str(len(node.bases)) + " 个基类）")
     if node.keywords:
         raise Unsupported("类定义带关键字参数（metaclass 等）")
     # **类装饰器** ✅：建类之后在运行期按逆序应用 ✅（见 backend/codegen.py ✅）
@@ -54,6 +53,9 @@ def check_class(node: ast.ClassDef) -> None:
             for target in stmt.targets:
                 if not isinstance(target, ast.Name):
                     raise Unsupported("类属性赋值目标不是简单名字")
+            continue
+        if isinstance(stmt, (ast.AnnAssign,)):
+            # 类属性 `x: int = 0` ✅（driver 会处理 ✅）
             continue
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
             continue  # 文档字符串 ✅

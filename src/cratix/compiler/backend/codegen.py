@@ -158,6 +158,15 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+class _ScopeStub:
+    """**最小作用域** ✅ —— 只给"生成基类表达式"用 ✅（类体里没有局部 ✅）。"""
+
+    locals_: set = set()
+    params: set = set()
+    globals_: set = set()
+    free: set = set()
+
+
 def _class_source_name(source: str) -> str:
     """从类源码里取类名 ✅（回退类按位置插入时要用 ✅）。"""
     for line in source.splitlines():
@@ -802,9 +811,36 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            if (t == NULL) { Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(t);")
             out.append("        }")
-        # **建类** ✅ —— `PyType_FromSpec` ✅（要有**实例结构体**才能做属性槽位 ✅）。
-        # 类属性/文档/跳板在**建类之后**用 SetAttr 挂 ✅。
-        out.append("        PyObject *cls = (PyObject *)PyType_FromSpec(&cratix_cls_" + c_ident(cls["name"]) + "_spec);")
+        # **建类** ✅ —— 有实例结构体的走 `PyType_FromSpec` ✅；
+        # **继承的类**走 `type(name, (Base,), ns)` ✅（布局由基类决定 ✅，我们只挂方法 ✅）。
+        maker_error_label = False
+        if cls.get("inherited"):
+            base_ir = cls.get("base")
+            if base_ir is None:
+                out.append("        PyObject *cratix_base = (PyObject *)&PyBaseObject_Type;")
+                out.append("        Py_INCREF(cratix_base);")
+            else:
+                base_gen = FunctionGen("<class base>", None, [], _ScopeStub(), None)
+                base_tmp = base_gen.emit_expr(base_ir)
+                for tmp in base_gen.tmp_names:
+                    out.append("        PyObject *" + tmp + " = NULL;")
+                out.extend("    " + line for line in base_gen.lines)
+                maker_error_label = True
+                out.append("        PyObject *cratix_base = " + base_tmp + ";")
+                out.append("        " + base_tmp + " = NULL;")
+            out.append("        PyObject *cratix_bases = PyTuple_Pack(1, cratix_base);")
+            out.append("        Py_DECREF(cratix_base);")
+            out.append("        if (cratix_bases == NULL) return -1;")
+            out.append("        PyObject *cratix_cname = PyUnicode_FromString(" + q + cls["name"] + q + ");")
+            out.append("        if (cratix_cname == NULL) { Py_DECREF(cratix_bases); return -1; }")
+            out.append("        PyObject *cratix_ns = PyDict_New();")
+            out.append("        if (cratix_ns == NULL) { Py_DECREF(cratix_cname); Py_DECREF(cratix_bases); return -1; }")
+            out.append("        PyObject *cls = PyObject_CallFunctionObjArgs((PyObject *)&PyType_Type, cratix_cname, cratix_bases, cratix_ns, NULL);")
+            out.append("        Py_DECREF(cratix_ns);")
+            out.append("        Py_DECREF(cratix_cname);")
+            out.append("        Py_DECREF(cratix_bases);")
+        else:
+            out.append("        PyObject *cls = (PyObject *)PyType_FromSpec(&cratix_cls_" + c_ident(cls["name"]) + "_spec);")
         out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
         out.append("        cratix_type_" + c_ident(cls["name"]) + " = cls;")
         out.append("        Py_INCREF(cratix_type_" + c_ident(cls["name"]) + ");")
@@ -905,8 +941,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             line.replace("Py_DECREF(m); return NULL;", "return -1;")
             for line in out
         ]
+        # **错误标签不能塞在 return 0 之前** ✅ —— 否则成功路径也会 fall through 到 `return -1` ✅（实测 ✅）
         out = saved_out
-        class_makers.append((cls["name"], maker_lines))
+        class_makers.append((cls["name"], maker_lines, maker_error_label))
     out.append("    return m;")
     out.append("}")
     if alias_init:
@@ -915,19 +952,18 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("    return " + init_symbol + "();")
         out.append("}")
     # **类创建函数定义** ✅（放在 init 之后 ✅ —— 前面已有前置声明 ✅）
-    for cls_name, maker_lines in class_makers:
+    for cls_name, maker_lines, needs_label in class_makers:
         out.append("")
         out.append("static int cratix_make_" + c_ident(cls_name) + "(void) {")
         out.extend(maker_lines)
         out.append("    return 0;")
+        if needs_label:
+            out.append("cratix_error:")
+            out.append("    return -1;")
         out.append("}")
     # **常量池的静态声明** ✅ —— 放在 include 之后 ✅（必须在文件作用域 ✅）
     emit_pool_statics(out, consts)
-    # **类创建函数的前置声明** ✅ —— 模块体里要调用它们 ✅（定义在 init 之后 ✅）
-    for cls in (classes or []):
-        out.append("static int cratix_make_" + c_ident(cls["name"]) + "(void);")
-    if classes:
-        out.append("")
+
     # **实例结构体也必须在函数体之前** ✅ —— 属性快路径要按偏移解引用 ✅
     declarations = []
     for cls in (classes or []):
@@ -939,6 +975,11 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             declarations.append("    PyObject *s" + str(index) + ";")
         declarations.append("} " + class_struct + ";")
         declarations.append("static PyObject *cratix_type_" + c_ident(cls["name"]) + " = NULL;")
+        declarations.append("")
+    # **类创建函数的前置声明** ✅ —— 模块体里要调用它们 ✅（定义在 init 之后 ✅）
+    for cls in (classes or []):
+        declarations.append("static int cratix_make_" + c_ident(cls["name"]) + "(void);")
+    if classes:
         declarations.append("")
     if declarations:
         index = 0
@@ -2286,6 +2327,26 @@ class FunctionGen:
             self.emit_boolop(node, t)
             return t
         if kind == "call":
+            # **零参 `super()`** ✅ —— 它依赖 `__class__` cell ✅（我们编译出来没有 ✅）-> 
+            # 直接改写成 `super(本类, self)` ✅（单继承语义完全一致 ✅）。
+            super_node = node.kids[0] if node.kids else None
+            if (
+                super_node is not None
+                and super_node.kind == "name"
+                and super_node.get("id") == "super"
+                and len(node.kids) == 1
+                and not node.get("keywords")
+                and self.enclosing_class
+                and "self" in self.scope.locals_
+            ):
+                cls_ref = "cratix_type_" + c_ident(self.enclosing_class)
+                self_obj = self.local_var("self")
+                sup = self.new_tmp()
+                self.emit(sup + " = PyObject_CallFunctionObjArgs((PyObject *)&PySuper_Type, " + cls_ref + ", " + self_obj + ", NULL);")
+                self.emit("if (" + sup + " == NULL) goto cratix_error;")
+                self.emit(t + " = " + sup + ";")
+                self.emit(sup + " = NULL;")
+                return t
             if self.emit_fast_builtin(node, t):
                 return t
             if self.emit_method_call(node, t):
