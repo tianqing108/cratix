@@ -270,6 +270,10 @@ CPython 有一个我们没做的特化 ✅：`BINARY_OP_INPLACE_ADD_UNICODE` ✅
 **为什么难查** ✅：**第一次永远正常** ✅ —— 引用计数"少 1"要等下一次才现形 ✅；
 而且报出来的是**别的函数**（`list.sort`）的 TypeError ✅，完全指不到真凶 ✅。
 
+**防回归** ✅：新增 `tests/test_helper_refs.py`（6 项 ✅）——
+每个用例**至少调用 3 次** ✅（只调一次是发现不了"引用少 1"的 ✅），
+覆盖 lambda ✅ / lambda+元组键 ✅ / 嵌套 def ✅ / 生成器表达式 ✅ / 字典往返 ✅ / 字符串自拼接 ✅。
+
 **教训** ✅：**`PyDict_GetItem*`/`PyList_GET_ITEM` 这类借用引用，绝不能直接放进"会被清理的临时变量"** ✅ ——
 要么当场 INCREF ✅，要么用完立刻置 NULL ✅。这条以前踩过一次（`PyTuple_SET_ITEM` ✅），
 这次是**从字典取函数**的变种 ✅。
