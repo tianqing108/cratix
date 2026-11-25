@@ -392,9 +392,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             }
             captured = sorted(used & (scope.locals_ - {"__class__"}))
             if captured:
-                # **回退** ✅ —— 工厂方案的结果是对的 ✅，但**模块析构仍会崩** ✅
-                # （双 DECREF 修掉了 ✅，还剩别的引用问题 ✅ —— TODO 见 pitfalls #121 ✅）。
-                # 崩溃比回退糟得多 ✅ -> 整函数回退 ✅（语义正确 ✅）。
+                factory = "_cratix_cls_factory_" + str(len(result.class_factories))
+                body = chr(10).join("    " + line for line in segment.splitlines())
+                result.class_factories[key] = {
+                    "name": factory,
+                    "captured": captured,
+                    "class_name": node.name,
+                    "source": (
+                        "def " + factory + "(" + ", ".join(captured) + "):" + chr(10)
+                        + body + chr(10)
+                        + "    return " + node.name + chr(10)
+                    ),
+                }
                 return
         result.inline_class_sources[key] = segment
 

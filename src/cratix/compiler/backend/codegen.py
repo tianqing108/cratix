@@ -1529,6 +1529,7 @@ class FunctionGen:
         self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: closure helper missing\");")
         self.emit("    goto cratix_error;")
         self.emit("}")
+
         value = self.new_tmp()
         if site["captures"]:
             if not self.cells_var:
@@ -1547,6 +1548,8 @@ class FunctionGen:
             self.emit("if (" + value + " == NULL) goto cratix_error;")
         else:
             self.emit(value + " = Py_NewRef(" + fn + ");")
+        # **借用的引用** ✅ -> 之后不会再用了 ✅ -> 置 NULL ✅（出口清理会 DECREF 临时变量 ✅）
+        self.emit(fn + " = NULL;")
         var = self.local_var(site["def_name"])
         self.emit("Py_XDECREF(" + var + ");")
         self.emit(var + " = " + value + ";")
@@ -2236,6 +2239,8 @@ class FunctionGen:
                 self.emit("if (" + fn + " == NULL) { PyErr_SetString(PyExc_NameError, \"cratix: class factory missing\"); goto cratix_error; }")
                 fn_copy = self.new_tmp()
                 self.emit(fn_copy + " = Py_NewRef(" + fn + ");")
+                # **借用的引用不能留在临时变量里** ✅ —— 出口清理会 DECREF 它 ✅ -> 过度释放 ✅
+                self.emit(fn + " = NULL;")
                 args = self.new_tmp()
                 self.emit(args + " = PyTuple_New(" + str(len(factory["captured"])) + ");")
                 self.emit("if (" + args + " == NULL) { Py_DECREF(" + fn_copy + "); goto cratix_error; }")

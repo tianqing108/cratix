@@ -372,7 +372,8 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertTrue(data["module_ok"], "编译器不该因为函数里的类崩掉")
         self.assertIn("local_class_only", data["supported"])
         self.assertIn("class_from_module_globals", data["supported"])
-        self.assertEqual(data["fallback"], ["capturing_class_falls_back"])
+        # **捕获外层局部的类现在也能 AOT 了** ✅（工厂函数 -> 方法拿到真闭包 ✅）
+        self.assertEqual(data["fallback"], [])
         self.assertEqual(data["local_only"], 3)
         self.assertEqual(data["from_globals"], 20)
         self.assertEqual(data["capturing"], 3)
