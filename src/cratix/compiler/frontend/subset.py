@@ -74,6 +74,9 @@ def check_class(node: ast.ClassDef) -> None:
         if isinstance(stmt, ast.ImportFrom):
             # **类体里的 `from x import y`** ✅ —— 名字变成类属性 ✅（driver 处理 ✅）
             continue
+        if isinstance(stmt, (ast.If, ast.Try, ast.For, ast.While, ast.With)):
+            # **类体里的控制流** ✅ —— driver 会 exec 整个块并把名字抄成类属性 ✅
+            continue
         if isinstance(stmt, ast.Pass):
             continue
         # **类体里的类** ✅ 已支持 ✅（源码 exec 后挂到外层类上 ✅）

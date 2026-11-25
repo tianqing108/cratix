@@ -1123,6 +1123,14 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 if segment:
                     class_info["fallback_methods"].append((item.name, segment, item.lineno))
                 continue
+            elif isinstance(item, (ast.If, ast.Try, ast.For, ast.While, ast.With)):
+                # **类体里的控制流** ✅（`if sys.version_info >= ...: def foo(...)` 这种 ✅）——
+                # 与类体 import 同一套：exec 到临时命名空间 ✅，再把名字抄成类属性 ✅。
+                # 里面的方法会变成**普通 Python 函数** ✅（语义正确 ✅ 只是没 AOT ✅）。
+                segment = _source_segment(source, item, dedent=True)
+                if segment:
+                    class_info["imports"].append(segment)
+                continue
             elif isinstance(item, ast.ImportFrom):
                 # **类体里的 `from x import y`** ✅ —— 名字会变成**类属性** ✅。
                 # 记下源码 ✅，建类时 exec 到一个临时命名空间 ✅，再把里面所有名字挂到类上 ✅。
