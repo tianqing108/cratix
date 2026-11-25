@@ -96,8 +96,8 @@ class FunctionFallbackTest(unittest.TestCase):
     def test_06_decorators_and_property(self):
         data = run_worker("decorators")
         # 装饰器函数本身回退 ✅（体内有嵌套 def ✅）；被装饰的函数也回退 ✅（PyCFunction 没有 __dict__ ✅）
-        # **装饰器里的闭包也能 AOT 了** ✅ -> 只剩"模块级装饰器"的函数回退 ✅
-        self.assertEqual(data["fallback"], ["composed", "twice"])
+        # **模块级装饰器也支持了** ✅（跳板 + 套装饰器 + 换回公开名 ✅）-> 全部 AOT ✅
+        self.assertEqual(data["fallback"], [])
         # 类方法全部 AOT 化 ✅（含 @property / @staticmethod / @classmethod / 自定义装饰器 ✅）
         for name in ("doubled", "label", "helper", "build", "scaled", "plain"):
             self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
@@ -225,7 +225,8 @@ class FunctionFallbackTest(unittest.TestCase):
     def test_14_lambda(self):
         """lambda ✅ —— 编译成模块级原生函数；**捕获外层局部**的回退 ✅。"""
         data = run_worker("lambda")
-        self.assertEqual(data["fallback"], ["captures"])
+        # **lambda 捕获也支持了** ✅（与嵌套 def 同一套 cell 机制 ✅）-> 全部 AOT ✅
+        self.assertEqual(data["fallback"], [])
         for name in ("doubled", "by_second", "immediate", "with_global", "nested_lambda"):
             self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
         self.assertEqual(data["doubled"], [2, 4])
@@ -247,6 +248,15 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["late"], [3, 2])
         self.assertEqual(data["loop"], 4)
         self.assertEqual(data["plain"], [2, 4])
+
+    def test_16_module_decorators(self):
+        """模块级装饰器 ✅（`@lru_cache` 真的在缓存 ✅ / 自定义装饰器 ✅ / 叠两层 ✅）。"""
+        data = run_worker("module_decorators")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(sorted(data["decorated"]), ["fib", "plus_one", "stacked"])
+        self.assertEqual(data["calls"], [10, "[12]", 55])
+        self.assertTrue(data["cached"], "lru_cache 必须真的在缓存")
+        self.assertEqual(data["fib"], 610)
 
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")

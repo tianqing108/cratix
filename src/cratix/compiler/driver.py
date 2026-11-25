@@ -55,6 +55,8 @@ class ModuleCompile:
     class_meta: dict = field(default_factory=dict)
     # **生成器表达式的辅助函数源码** ✅（名字 -> 源码 ✅，模块 init 里建出来 ✅）
     genexp_sources: dict = field(default_factory=dict)
+    # **模块级装饰器** ✅（(名字, [装饰器表达式...]) ✅）
+    decorated_functions: list = field(default_factory=list)
 
     @property
     def supported_names(self) -> list:
@@ -301,6 +303,9 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         names = sorted(n for n in writes if n.isidentifier() and n not in ("self", "__class__"))
         class_slots_map[stmt.name] = {name: index for index, name in enumerate(names)}
 
+    # **模块级装饰器** ✅（名字 -> 装饰器表达式 ✅）
+    decorated_functs: list = []
+
     # --- 闭包 ✅：函数里的嵌套 def ✅（cell 字典 + functools.partial ✅）---
     inner_gens: list = []
     inner_sites: dict = {}
@@ -347,6 +352,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     # --- lambda ✅：先扫出来 ✅，编译成**模块级原生函数** ✅（使用点按名字取 ✅）---
     lambda_gens: list = []
     lambda_names: dict = {}
+    lambda_captures: dict = {}
     for stmt in tree.body:
         if not isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
             continue
@@ -373,12 +379,14 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
                 }
                 captured = (used - param_names) & analysis.locals_
-                if captured:
-                    continue
                 name = "_cratix_lambda_" + str(len(lambda_names))
                 built = builder.build_lambda(child)
                 lambda_names[key] = name
-                lambda_gens.append((name, built))
+                # **捕获外层局部** ✅ -> 和嵌套 def 同一套 cell 机制 ✅
+                lambda_gens.append((name, built, sorted(captured)))
+                if captured:
+                    lambda_captures[key] = sorted(captured)
+                    inner_cells.setdefault(func_node.name, set()).update(captured)
 
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
@@ -428,7 +436,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.plans.append(FunctionPlan(inner_name, True, ""))
 
     # **lambda 先生成** ✅ —— 它们是模块级函数 ✅，函数体里只按名字取 ✅
-    for lam_name, built_lambda in lambda_gens:
+    for lam_name, built_lambda, lam_captured in lambda_gens:
         lam_params = built_lambda["params"]
         lam_scope = Scope(name=lam_name)
         lam_scope.locals_ = set(lam_params.get("names", [])) | set(lam_params.get("kwonly", []))
@@ -436,10 +444,23 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             lam_scope.locals_.add(lam_params["vararg"])
         if lam_params.get("kwarg"):
             lam_scope.locals_.add(lam_params["kwarg"])
+        # **有捕获就把 cell 字典做成隐藏首参** ✅
+        if lam_captured:
+            lam_params = {
+                "names": ["_cratix_cells"] + list(lam_params.get("names", [])),
+                "defaults": list(lam_params.get("defaults", [])),
+                "kwonly": list(lam_params.get("kwonly", [])),
+                "kwdefaults": list(lam_params.get("kwdefaults", [])),
+                "vararg": lam_params.get("vararg"),
+                "kwarg": lam_params.get("kwarg"),
+            }
+            lam_scope.locals_.add("_cratix_cells")
         try:
             lam_gen = codegen.FunctionGen(
                 lam_name, lam_params, built_lambda["body"], lam_scope, consts,
                 lambda_names=lambda_names,
+                closure_names=set(lam_captured),
+                inner_sites=inner_sites,
                 package=module_name.rpartition(".")[0],
             )
             lam_gen.emit_binding()
@@ -471,8 +492,13 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             # **模块级装饰器走函数级回退** ✅ ——
             # 原生函数是 PyCFunction ✅（没有 __dict__ ✅）✅ -> functools.wraps 之类会在它上面失败 ✅；
             # 回退路径在模块字典里 exec 源码 ✅ -> 装饰器**原样生效** ✅（无静默语义偏差 ✅）。
+            # **模块级装饰器** ✅：原生实现照常编译 ✅，运行期用**跳板**包一层再套装饰器 ✅
+            # （原生 PyCFunction 没有 __dict__ ✅ -> functools.wraps 之类会在它上面失败 ✅）
             if stmt.decorator_list:
-                raise Unsupported("模块级装饰器（函数级回退）")
+                decorated_functs.append((
+                    stmt.name,
+                    [_decorator_segment(source, dec) for dec in stmt.decorator_list],
+                ))
             check_function(stmt, scope)
             built = builder.build_stmt(stmt)
             gen = codegen.FunctionGen(
@@ -481,6 +507,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **函数里的相对导入** ✅ 也要能解析 ✅（否则 `from . import x` 回退 ✅）
                 package=module_name.rpartition(".")[0],
                 lambda_names=lambda_names,
+                lambda_captures=lambda_captures,
                 cell_names=inner_cells.get(stmt.name, set()),
                 inner_sites=inner_sites,
             )
@@ -593,6 +620,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         known_classes=class_slots_map,
                         enclosing_class=stmt.name,
                         lambda_names=lambda_names,
+                        lambda_captures=lambda_captures,
                         cell_names=inner_cells.get(item.name, set()),
                         inner_sites=inner_sites,
                     )
@@ -661,6 +689,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     # 因为那时才知道每个类最终有哪些槽位 ✅；生成函数时先用**声明好的**表 ✅。
     result.key_names = key_names
     result.module_gen = module_gen
+    result.decorated_functions = decorated_functs
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
     # → stub 的 is_def 判定为假 ✅ → 直接返回模块 ✅ → 模块体已在 init 里执行 ✅
     # → meta.json 标 exec_done ✅ → 引导模块不再调 exec_def ✅（否则会重跑 ✅）。
@@ -676,6 +705,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         consts,
         result.func_meta,
         result.genexp_sources,
+        result.decorated_functions,
     )
     result.consts = consts
     return result
@@ -716,6 +746,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             consts=module_compile.consts,
             func_meta=module_compile.func_meta,
             genexps=module_compile.genexp_sources,
+            decorated_functions=module_compile.decorated_functions,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

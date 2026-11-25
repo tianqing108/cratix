@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_module_decorators(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_module_decorators.py", "cratix_corpus_module_decorators", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "decorated": [name for name, _segs in mc.decorated_functions],
+        "calls": list(mod.calls()),
+        "cached": mod.cache_stats(),
+        "fib": mod.fib(15),
+    }
+
+
 def op_closures(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_closures.py", "cratix_corpus_closures", out_dir)
     return {
@@ -368,6 +380,8 @@ def main() -> int:
             data = op_lambda(out_dir)
         elif op == "closures":
             data = op_closures(out_dir)
+        elif op == "module_decorators":
+            data = op_module_decorators(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

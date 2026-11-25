@@ -372,7 +372,8 @@ def module_body_parts(gen: FunctionGen):
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
                                  key_names: list, module_gen=None, alias_init: str | None = None,
                                  fallback_code: dict | None = None, classes: list | None = None,
-                                 consts=None, func_meta=None, genexps=None) -> str:
+                                 consts=None, func_meta=None, genexps=None,
+                                 decorated_functions=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -445,8 +446,44 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        if (cratix_g == NULL) return -1;")
         out.append("        Py_DECREF(cratix_g);")
         out.append("    }")
+    # **模块体先跑** ✅ —— 装饰器名往往来自模块体的 import ✅（实测：先套装饰器会 NameError ✅）
     if module_gen is not None:
         out.extend(body_lines)
+    # **模块级装饰器** ✅ —— 原生实现已经是模块属性 ✅；造一个 **Python 跳板** ✅
+    # （把原生函数绑成私有名 ✅ 避免自引用递归 ✅），套上装饰器 ✅ 再换回公开名 ✅。
+    for func_name, decorator_sources in (decorated_functions or []):
+        raw_name = "_cratix_raw_" + func_name
+        tb_name = "_cratix_dtb_" + func_name
+        out.append("    {")
+        out.append("        PyObject *cratix_raw = PyDict_GetItemString(cratix_globals, " + c_string(func_name) + ");")
+        out.append("        if (cratix_raw == NULL) {")
+        out.append("            PyErr_SetString(PyExc_NameError, \"cratix: decorated function missing\");")
+        out.append("            return -1;")
+        out.append("        }")
+        out.append("        Py_INCREF(cratix_raw);")
+        out.append("        if (PyDict_SetItemString(cratix_globals, " + c_string(raw_name) + ", cratix_raw) < 0) { Py_DECREF(cratix_raw); return -1; }")
+        out.append("        Py_DECREF(cratix_raw);")
+        tb_source = trampoline_source(tb_name, raw_name, {"names": [], "vararg": "cratix_args", "kwarg": "cratix_kw"})
+        out.append("        PyObject *cratix_tb = PyRun_String(" + c_string(tb_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        if (cratix_tb == NULL) return -1;")
+        out.append("        Py_DECREF(cratix_tb);")
+        out.append("        PyObject *cratix_fn = PyDict_GetItemString(cratix_globals, " + c_string(tb_name) + ");")
+        out.append("        if (cratix_fn == NULL) return -1;")
+        out.append("        Py_INCREF(cratix_fn);")
+        for segment in reversed([s for s in decorator_sources if s]):
+            out.append("        {")
+            out.append("            PyObject *dec = PyRun_String(" + c_string(segment) + ", Py_eval_input, cratix_globals, cratix_globals);")
+            out.append("            if (dec == NULL) { Py_DECREF(cratix_fn); return -1; }")
+            out.append("            PyObject *wrapped = PyObject_CallOneArg(dec, cratix_fn);")
+            out.append("            Py_DECREF(dec);")
+            out.append("            if (wrapped == NULL) { Py_DECREF(cratix_fn); return -1; }")
+            out.append("            Py_DECREF(cratix_fn);")
+            out.append("            cratix_fn = wrapped;")
+            out.append("        }")
+        out.append("        if (PyDict_SetItemString(cratix_globals, " + c_string(func_name) + ", cratix_fn) < 0) { Py_DECREF(cratix_fn); return -1; }")
+        out.append("        Py_DECREF(cratix_fn);")
+        out.append("    }")
+    if module_gen is not None:
         out.extend(body_cleanup)
     out.append("    return 0;")
     if module_gen is not None:
@@ -896,7 +933,7 @@ class FunctionGen:
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
                  class_methods=None, self_attr_writes=None, method_mode=False,
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
-                 cell_names=None, inner_sites=None, closure_names=None):
+                 cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -904,6 +941,8 @@ class FunctionGen:
         # **闭包** ✅：本函数里"住在 cell 字典里"的局部 ✅ / 嵌套 def 的登记表 ✅ / 自己捕获的名字 ✅
         self.cell_names = set(cell_names or ())
         self.inner_sites = dict(inner_sites or {})
+        # **lambda 捕获表** ✅（(行, 列) -> 捕获的名字 ✅）
+        self.lambda_captures = dict(lambda_captures or {})
         self.closure_names = set(closure_names or ())
         self.cells_var = ""
         self.func_name = func_name
@@ -2122,6 +2161,24 @@ class FunctionGen:
             self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: lambda helper missing\");")
             self.emit("    goto cratix_error;")
             self.emit("}")
+            captures = set((self.lambda_captures or {}).get(node.get("key")) or ())
+            if captures:
+                # **捕获外层局部** ✅ -> `functools.partial(fn, cells)` ✅（与嵌套 def 一致 ✅）
+                if not self.cells_var:
+                    raise Unsupported("lambda 捕获了变量但没有 cell 字典")
+                fmod = self.new_tmp()
+                part = self.new_tmp()
+                self.emit(fmod + " = PyImport_ImportModule(\"functools\");")
+                self.emit("if (" + fmod + " == NULL) goto cratix_error;")
+                self.emit(part + " = PyObject_GetAttrString(" + fmod + ", \"partial\");")
+                self.emit("Py_DECREF(" + fmod + ");")
+                self.emit(fmod + " = NULL;")
+                self.emit("if (" + part + " == NULL) goto cratix_error;")
+                self.emit(t + " = PyObject_CallFunctionObjArgs(" + part + ", " + fn + ", " + self.cells_var + ", NULL);")
+                self.emit("Py_DECREF(" + part + ");")
+                self.emit(part + " = NULL;")
+                self.emit("if (" + t + " == NULL) goto cratix_error;")
+                return t
             self.emit(t + " = Py_NewRef(" + fn + ");")
             return t
         if kind == "genexp":
