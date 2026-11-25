@@ -1478,6 +1478,9 @@ class FunctionGen:
         done = "cratix_match_done_" + str(index)
         end = "cratix_match_end_" + str(index)
         for case in node.get("cases", []):
+            if case["pattern"][0] == "sequence":
+                self._emit_sequence_case(case, subject, done, end)
+                continue
             cond = self._match_condition(case["pattern"], subject)
             if cond is None:
                 # **通配 / 纯捕获** ✅ -> 命中 ✅（guard 不成立就整体结束 ✅ —— 与 Python 一致 ✅）
@@ -1511,6 +1514,47 @@ class FunctionGen:
             self.emit("}")
         self.emit(end + ": ;")
         self.emit(done + ": ;")
+
+    def _emit_sequence_case(self, case, subject, done, end) -> None:
+        """**序列模式** ✅ —— 长度对 ✅ + 逐元素匹配 ✅ + 捕获 ✅ + guard ✅。
+
+        语义要点 ✅：**全部子模式匹配之后才绑定** ✅（Python 在同一 case 内失败不会留下绑定 ✅）。
+        """
+        subs = case["pattern"][1]
+        size = self.new_int_helper()
+        self.emit("{")
+        self.emit("    " + size + " = PySequence_Size(" + subject + ");")
+        self.emit("    if (" + size + " < 0) { PyErr_Clear(); }")
+        self.emit("    else if (" + size + " == " + str(len(subs))
+                  + " && !PyUnicode_Check(" + subject + ") && !PyBytes_Check(" + subject + ")) {")
+        items = []
+        for pos, sub in enumerate(subs):
+            item = self.new_tmp()
+            self.emit("        " + item + " = PySequence_GetItem(" + subject + ", " + str(pos) + ");")
+            self.emit("        if (" + item + " == NULL) goto cratix_error;")
+            items.append(item)
+        conds = []
+        for sub, item in zip(subs, items):
+            cond = self._match_condition(sub, item)
+            if cond is not None:
+                conds.append("(" + cond + ")")
+        self.emit("        if (" + (" && ".join(conds) if conds else "1") + ") {")
+        for sub, item in zip(subs, items):
+            self._match_bind(sub, item)
+        if case["guard"] is not None:
+            guard = self.emit_expr(case["guard"])
+            self.emit("            if (cratix_truth(" + guard + ")) {")
+            for stmt in case["body"]:
+                self.emit_stmt(stmt)
+            self.emit("                goto " + done + ";")
+            self.emit("            }")
+        else:
+            for stmt in case["body"]:
+                self.emit_stmt(stmt)
+            self.emit("            goto " + done + ";")
+        self.emit("        }")
+        self.emit("    }")
+        self.emit("}")
 
     def _match_condition(self, pattern, subject):
         """返回一个 C 布尔表达式 ✅；通配/捕获返回 None ✅（无条件命中 ✅）。"""

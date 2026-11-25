@@ -246,6 +246,12 @@ def _match_pattern(node):
         return ("capture", node.name)
     if isinstance(node, ast.MatchOr):
         return ("or", [_match_pattern(item) for item in node.patterns])
+    if isinstance(node, ast.MatchSequence):
+        # **序列模式** ✅（`case [a, b]:` / `case (a, b):` ✅）——
+        # `*rest` 暂不支持 ✅（回退 ✅ 语义正确 ✅）。
+        if any(isinstance(item, ast.MatchStar) for item in node.patterns):
+            raise Unsupported("match 序列模式带 *rest")
+        return ("sequence", [_match_pattern(item) for item in node.patterns])
     raise Unsupported("match 模式：" + type(node).__name__)
 
 
