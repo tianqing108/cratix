@@ -79,7 +79,7 @@ def check_function(node: ast.FunctionDef, scope) -> None:
             raise Unsupported("del 语句")
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:
             raise Unsupported("嵌套定义（" + type(child).__name__ + "）")
-        if isinstance(child, ast.Lambda):
-            raise Unsupported("lambda 表达式（M3 起支持）")
+        # **lambda** ✅ 已支持 ✅（无条件/无捕获的编译成原生函数 ✅；
+        # 捕获外层局部的在 codegen 里判定回退 ✅）。
         # **`global` 声明** ✅ 已支持 ✅ —— 作用域分析会把这些名字从局部里剔除 ✅，
         # 赋值走模块字典 ✅（codegen 的 emit_assign 里已有对应分支 ✅）。

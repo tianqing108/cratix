@@ -301,11 +301,79 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         names = sorted(n for n in writes if n.isidentifier() and n not in ("self", "__class__"))
         class_slots_map[stmt.name] = {name: index for index, name in enumerate(names)}
 
+    # --- lambda ✅：先扫出来 ✅，编译成**模块级原生函数** ✅（使用点按名字取 ✅）---
+    lambda_gens: list = []
+    lambda_names: dict = {}
+    for stmt in tree.body:
+        if not isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        nodes = [stmt]
+        if isinstance(stmt, ast.ClassDef):
+            nodes = [entry for entry in stmt.body if isinstance(entry, ast.FunctionDef)]
+        for func_node in nodes:
+            for child in ast.walk(func_node):
+                if not isinstance(child, ast.Lambda):
+                    continue
+                key = (getattr(child, "lineno", 0), getattr(child, "col_offset", 0))
+                if key in lambda_names:
+                    continue
+                # **捕获检查** ✅：lambda 读到外层局部变量必须回退 ✅（否则会变成"看不见"→ NameError ✅）
+                analysis = analyze_function(func_node, module_globals)
+                params = builder.build_params(child.args)
+                param_names = set(params.get("names", [])) | set(params.get("kwonly", []))
+                if params.get("vararg"):
+                    param_names.add(params["vararg"])
+                if params.get("kwarg"):
+                    param_names.add(params["kwarg"])
+                used = {
+                    sub.id for sub in ast.walk(child)
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+                }
+                captured = (used - param_names) & analysis.locals_
+                if captured:
+                    continue
+                name = "_cratix_lambda_" + str(len(lambda_names))
+                built = builder.build_lambda(child)
+                lambda_names[key] = name
+                lambda_gens.append((name, built))
+
     # --- 函数级判定 + 生成 ✅ ---
     key_names = []
     # **常量池** ✅ —— 整模块一个 ✅（常量只建一次 ✅，循环里只 INCREF ✅）
     # const_pool=False 只用于 **A/B 基准对照** ✅（产品路径永远开 ✅）
     consts = codegen.ConstantPool() if const_pool else None
+    # **lambda 先生成** ✅ —— 它们是模块级函数 ✅，函数体里只按名字取 ✅
+    for lam_name, built_lambda in lambda_gens:
+        lam_params = built_lambda["params"]
+        lam_scope = Scope(name=lam_name)
+        lam_scope.locals_ = set(lam_params.get("names", [])) | set(lam_params.get("kwonly", []))
+        if lam_params.get("vararg"):
+            lam_scope.locals_.add(lam_params["vararg"])
+        if lam_params.get("kwarg"):
+            lam_scope.locals_.add(lam_params["kwarg"])
+        try:
+            lam_gen = codegen.FunctionGen(
+                lam_name, lam_params, built_lambda["body"], lam_scope, consts,
+                lambda_names=lambda_names,
+                package=module_name.rpartition(".")[0],
+            )
+            lam_gen.emit_binding()
+            for lam_stmt in built_lambda["body"]:
+                lam_gen.emit_stmt(lam_stmt)
+        except Unsupported as exc:
+            result.plans.append(FunctionPlan(lam_name, False, exc.reason))
+            lambda_names.pop(
+                next((k for k, v in lambda_names.items() if v == lam_name), None), None
+            )
+            continue
+        result.functions.append(lam_gen)
+        # **参数名要 intern** ✅ —— 关键字绑定要用 `cratix_key_v_<名字>` ✅
+        for pname in list(lam_params.get("names", [])) + list(lam_params.get("kwonly", [])):
+            key_names.append(pname)
+        key_names.extend(sorted(lam_gen.global_names))
+        result.genexp_sources.update(lam_gen.genexp_sources)
+        result.plans.append(FunctionPlan(lam_name, True, ""))
+
     # **函数级回退的字节码来源** ✅：编译整个模块 ✅ 从 co_consts 里取函数 code object ✅
     # （比"抠源码再编译"稳 ✅ —— 行号/闭包/默认值都保真 ✅）
     # 保留 helper ✅（未来可用于字节码级回退 ✅）—— 当前用**内嵌源码** ✅
@@ -326,6 +394,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 known_classes=class_slots_map,
                 # **函数里的相对导入** ✅ 也要能解析 ✅（否则 `from . import x` 回退 ✅）
                 package=module_name.rpartition(".")[0],
+                lambda_names=lambda_names,
             )
             gen.emit_binding()
             for body_stmt in built.get("body", []):
@@ -434,6 +503,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         method_mode=item.name in set(descriptor_methods),
                         known_classes=class_slots_map,
                         enclosing_class=stmt.name,
+                        lambda_names=lambda_names,
                     )
                     gen.emit_binding()
                     for body_stmt in built.get("body", []):
@@ -483,6 +553,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             module_gen = codegen.FunctionGen(
             "<module>", None, [], Scope(name="<module>"), consts,
             package=module_name.rpartition(".")[0],
+            lambda_names=lambda_names,
         )
             for stmt in module_ir.get("body", []):
                 module_gen.emit_stmt(stmt)

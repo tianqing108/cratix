@@ -52,7 +52,23 @@ class _ScopeAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Lambda(self, node):
+        """**lambda 的参数是它自己的局部** ✅ —— 不能算外层函数的自由变量 ✅。
+
+        以前直接 generic_visit ✅ -> `lambda x: x*2` 里的 `x` 被当成外层的"读" ✅ ->
+        外层函数被判成"闭包捕获" ✅ 整函数回退 ✅（而 lambda 本身已经能编译 ✅）。
+        """
+        params = set()
+        args = node.args
+        for arg in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
+            params.add(arg.arg)
+        if args.vararg:
+            params.add(args.vararg.arg)
+        if args.kwarg:
+            params.add(args.kwarg.arg)
+        before_reads = set(self.reads)
         self.generic_visit(node)
+        # 只把**这个 lambda 体内新读到的**参数名剔掉 ✅（外层同名变量不受影响 ✅）
+        self.reads -= params - before_reads
 
     def visit_Name(self, node):
         if isinstance(node.ctx, ast.Store):

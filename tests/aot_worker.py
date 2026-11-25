@@ -143,6 +143,20 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_lambda(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_lambda.py", "cratix_corpus_lambda", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "doubled": mod.doubled([1, 2]),
+        "by_second": mod.by_second([[1, 9], [2, 3]]),
+        "immediate": mod.immediate(),
+        "with_global": mod.with_global(),
+        "captures": mod.captures([1, 2], 10),
+        "nested": mod.nested_lambda([1, 2]),
+    }
+
+
 def op_extras(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_extras.py", "cratix_corpus_extras", out_dir)
     return {
@@ -336,6 +350,8 @@ def main() -> int:
             data = op_finally(out_dir)
         elif op == "extras":
             data = op_extras(out_dir)
+        elif op == "lambda":
+            data = op_lambda(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

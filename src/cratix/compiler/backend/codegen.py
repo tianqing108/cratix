@@ -892,9 +892,11 @@ class FunctionGen:
 
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
                  class_methods=None, self_attr_writes=None, method_mode=False,
-                 known_classes=None, enclosing_class=None, package=""):
+                 known_classes=None, enclosing_class=None, package="", lambda_names=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
+        # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
+        self.lambda_names = dict(lambda_names or {})
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
         self.method_mode = bool(method_mode)
@@ -2036,6 +2038,19 @@ class FunctionGen:
         if kind in ("listcomp", "setcomp", "dictcomp"):
             self.emit_comprehension(node, t, kind)
             return t
+        if kind == "lambda":
+            # **lambda 的值 = 那个原生函数对象** ✅（模块级 ✅，从模块字典里取 ✅）
+            name = self.lambda_names.get(node.get("key"))
+            if not name:
+                raise Unsupported("lambda（未登记）")
+            fn = self.new_tmp()
+            self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(name) + ");")
+            self.emit("if (" + fn + " == NULL) {")
+            self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: lambda helper missing\");")
+            self.emit("    goto cratix_error;")
+            self.emit("}")
+            self.emit(t + " = Py_NewRef(" + fn + ");")
+            return t
         if kind == "genexp":
             self.emit_genexp(node, t)
             return t
@@ -2229,7 +2244,9 @@ class FunctionGen:
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
         else:
             self.emit("cratix_kwnames = NULL;")
-        self.emit(t + " = PyObject_Vectorcall(" + func + ", cratix_vargs + 1, " + str(n) + ", cratix_kwnames);")
+        # **nargsf 只算"位置参数"** ✅ —— 关键字的值排在后面 ✅、个数由 kwnames 决定 ✅。
+        # 传成总个数 ✅ -> CPython 以为多了一个位置参数 ✅ -> "sorted expected 1 argument, got 2" ✅（实测 ✅）
+        self.emit(t + " = PyObject_Vectorcall(" + func + ", cratix_vargs + 1, " + str(n_pos) + ", cratix_kwnames);")
         if n_kw:
             self.emit("Py_DECREF(cratix_kwnames);")
             self.emit("cratix_kwnames = NULL;")

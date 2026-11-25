@@ -201,6 +201,14 @@ def _fold(op: str, left, right):
     return None
 
 
+def build_lambda(node: ast.Lambda) -> dict:
+    """把 lambda 建成一个**普通函数**的形态 ✅（参数 + `return 表达式` ✅）。"""
+    return {
+        "params": build_params(node.args),
+        "body": [ir.node("return", build_expr(node.body))],
+    }
+
+
 def build_expr(node: ast.expr) -> ir.Node:
     """表达式 -> IR ✅。"""
     if isinstance(node, ast.Constant):
@@ -333,7 +341,16 @@ def build_expr(node: ast.expr) -> ir.Node:
     if isinstance(node, ast.Starred):
         return ir.node("starred", build_expr(node.value))
     if isinstance(node, ast.Lambda):
-        raise Unsupported("lambda 表达式（M3 起支持）")
+        # **lambda** ✅：车成模块级的**原生函数** ✅（与普通函数同一套生成 ✅），
+        # 使用点只负责取到那个函数对象 ✅（见 codegen 的 "lambda" 分支 ✅）。
+        # 用 (行, 列) 当稳定键 ✅ —— builder 与 driver 各自都能从 AST 算出来 ✅。
+        key = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        return ir.node(
+            "lambda",
+            build_expr(node.body),
+            params=build_params(node.args),
+            key=key,
+        )
     if isinstance(node, ast.NamedExpr):
         raise Unsupported("海象运算符 :=")
     if isinstance(node, ast.Await):

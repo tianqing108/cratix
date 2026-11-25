@@ -219,6 +219,20 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["reset"], 0)
         self.assertEqual(data["after_reset"], 0)
 
+    def test_14_lambda(self):
+        """lambda ✅ —— 编译成模块级原生函数；**捕获外层局部**的回退 ✅。"""
+        data = run_worker("lambda")
+        self.assertEqual(data["fallback"], ["captures"])
+        for name in ("doubled", "by_second", "immediate", "with_global", "nested_lambda"):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        self.assertEqual(data["doubled"], [2, 4])
+        # **关键字调用** ✅：`sorted(pairs, key=lambda ...)` —— 顺带守住 vectorcall 的 nargsf ✅
+        self.assertEqual(data["by_second"], [[2, 3], [1, 9]])
+        self.assertEqual(data["immediate"], 12)
+        self.assertEqual(data["with_global"], 11)
+        self.assertEqual(data["captures"], [11, 12])
+        self.assertEqual(data["nested"], [3, 6])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

@@ -142,6 +142,13 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：lambda ✅（以及一个一直藏着的调用 bug ✅）
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 76 | `sorted(pairs, key=lambda p: p[1])` 报 "sorted expected 1 argument, got 2" ✅ | `PyObject_Vectorcall` 的 `nargsf` **只算位置参数** ✅（关键字的值排在后面 ✅、个数看 kwnames ✅），我们传了"位置 + 关键字"的**总数** ✅ | 传 `n_pos` ✅。**这个 bug 一直都在** ✅，只是以前没有测试用**关键字调用** ✅（lambda 一上来就暴露 ✅） |
+| 77 | lambda 能编译了，可**外层函数**还是回退"闭包捕获（自由变量：x）" ✅ | 作用域分析的 `visit_Lambda` 直接 `generic_visit` ✅ -> lambda 的**形参**被算成外层的"读" ✅ | `visit_Lambda` 先记形参 ✅、访问后只把**该 lambda 体内新读到的**形参名剔掉 ✅（外层同名变量不受影响 ✅） |
+
 ## 追加：`from ... import` / `global` / 非局部复合赋值 ✅
 
 | # | 现象 | 根因 | 修法 |
