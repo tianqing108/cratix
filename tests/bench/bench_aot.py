@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 import time
 from pathlib import Path
@@ -78,6 +79,8 @@ def main() -> int:
             pass
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeat", type=int, default=9, help="每例重复轮数（取最快 ✅）")
+    parser.add_argument("--record", action="store_true", help="把本次结果追加到基准历史 ✅")
+    parser.add_argument("--history", type=int, default=0, metavar="N", help="打印最近 N 次历史 ✅")
     args = parser.parse_args()
     out_dir = ROOT / "build" / "bench"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -127,6 +130,43 @@ def main() -> int:
     geo_core = geo_core ** (1.0 / len(core)) if core else 0.0
     print("%-28s %12s %12s %8.2fx" % ("GEO-MEAN(全部)", "-", "-", geo))
     print("%-28s %12s %12s %8.2fx" % ("GEO-MEAN(corpus_basic)", "-", "-", geo_core))
+    # **历史记录** ✅ —— 一次一个 JSON 行 ✅（方便 grep / 画趋势 ✅，且不会互相覆盖 ✅）
+    history_path = ROOT / "build" / "bench-history.jsonl"
+    if args.record:
+        record = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "repeat": args.repeat,
+            "python": sys.version.split()[0],
+            "cases": {
+                corpus + "." + func: round(t_src / t_aot, 4)
+                for (corpus, func, call, iters) in CASES
+                for t_src, t_aot in [(
+                    _time(getattr(sources[corpus], func), call, iters, args.repeat),
+                    _time(getattr(aots[corpus], func), call, iters, args.repeat),
+                )]
+                if t_aot > 0
+            },
+            "total": round(overall, 4),
+            "geo": round(geo, 4),
+            "geo_basic": round(geo_core, 4),
+        }
+        with open(history_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + chr(10))
+        print("[bench] 已记录 ✅ -> " + str(history_path))
+    if args.history and history_path.is_file():
+        print("")
+        print("%-20s %8s %8s %8s  %s" % ("时间", "TOTAL", "GEO", "GEO基本", "最慢用例"))
+        lines = [l for l in history_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        for line in lines[-args.history:]:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            worst = min(item.get("cases", {"-": 1}).items(), key=lambda kv: kv[1])
+            print("%-20s %8.3f %8.3f %8.3f  %s=%.2fx" % (
+                item.get("at", "?")[:19], item.get("total", 0), item.get("geo", 0),
+                item.get("geo_basic", 0), worst[0], worst[1],
+            ))
     return 0
 
 

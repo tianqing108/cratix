@@ -142,6 +142,12 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：质量门与基准历史 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 90 | `scripts/check.py` 里构建/冒烟两步报 `No module named cratix` ✅ | 子进程是**干净的 Python 环境** ✅（cratix 没装进 site-packages ✅） | 给所有子进程注入 `PYTHONPATH=<repo>/src` ✅ |
+
 ## 追加：星号解包 ✅
 
 | # | 现象 | 根因 | 修法 |

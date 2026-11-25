@@ -498,7 +498,20 @@ Python 语义正好对上 ✅：最外层可迭代对象**立即求值** ✅，�
 `GEO-MEAN(corpus_basic)` **1.14× → 1.18×** ✅、`GEO-MEAN(全部)` **1.17× → 1.21×** ✅、
 加权总速 **1.22×** ✅。`corpus_basic` 只剩 `strings` 0.99×（其他 4 个都 ≥1.1× ✅）。
 
-**下一步** ✅：字符串路径（`strings` 0.99× ✅）。
+**追加：字符串直译 + 质量门 ✅**
+
+- **`str.split` / `str.join` 直译** ✅（与 `list.append` 同一套守卫：`PyUnicode_CheckExact` ✅ ->
+  `PyUnicode_Split` / `PyUnicode_Join` ✅）。`strings` **0.99× → 1.05×** ✅。
+- **`scripts/check.py` 质量门** ✅：**测试 ✅ + 严格 AOT 构建 ✅ + 零落盘冒烟 ✅ + 基准 ✅** 一次跑完 ✅。
+  为什么要有它 ✅：测试绿但构建坏 ✅ / 构建好但性能掉 ✅ 都是"假绿" ✅ —— 一个脚本把四件事绑在一起 ✅。
+  （踩坑 ✅：`python -m cratix` 在没装包的环境里找不到模块 ✅ -> 子进程统一注入 `PYTHONPATH=src` ✅。）
+- **基准历史** ✅：`bench_aot.py --record` 追加一行 JSON ✅、`--history N` 打印最近 N 次 ✅ ——
+  回归不再靠记忆 ✅（`build/bench-history.jsonl` ✅）。
+
+**最新基准** ✅（`--repeat 5` ✅）：`TOTAL 1.27×` ✅ / `GEO-MEAN(全部) 1.25×` ✅ / `GEO-MEAN(corpus_basic) 1.20×` ✅，
+`corpus_basic` **5 个用例全部 ≥1.05×** ✅（`add 1.45×` / `control 1.33×` / `strings 1.05×` / `containers 1.15×` / `mixed 1.12×` ✅）。
+
+**下一步** ✅：类型特化（整数快路径 ✅）—— 往 1.5× 去 ✅。
 
 ## 下一步
 

@@ -30,7 +30,9 @@
 AOT **增量编译** ✅（指纹命中即跳过 cl+link ✅，热构建 3.3 s ✅）；
 性能基准 ✅（`tests/bench/bench_aot.py` ✅，**每例实跑一批** ✅ + 几何平均 ✅）——
 `add 1.43×` ✅ / `control 1.05×` ✅ / `strings 0.99×` ✅ / `containers 1.00×` ✅ / `mixed 0.99×` ✅，
-**corpus_basic 几何平均 1.18×** ✅、全部用例几何平均 **1.21×** ✅（诚实记录 ✅）；
+**corpus_basic 几何平均 1.20×** ✅、全部用例几何平均 **1.25×** ✅（诚实记录 ✅）；
+**质量门** ✅：`python scripts/check.py` 一次跑完 测试 + 严格 AOT 构建 + 零落盘冒烟 + 基准 ✅；
+**基准历史** ✅：`bench_aot.py --record/--history` ✅；
 **星号解包** ✅（`a, *b = seq` ✅）：`containers 0.99× → 1.14×` ✅；
 **内建方法直译** ✅（`list.append` / `dict.get` ✅）：`control 1.03× → 1.32×` ✅、`loop_str 1.50× → 1.59×` ✅；
 **原生方法描述符** ✅（去掉 Python 跳板帧 ✅）+ **实例结构体/属性槽位** ✅（按偏移直接读写 ✅）：

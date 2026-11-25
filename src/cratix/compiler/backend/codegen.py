@@ -2363,6 +2363,38 @@ class FunctionGen:
             self.emit("    if (" + t + " == NULL) goto cratix_error;")
             self.emit("}")
             return True
+        if attr == "split" and len(positional) == 1:
+            # `s.split(sep)` ✅ -> `PyUnicode_Split` ✅（省掉属性查找 + 绑定方法 ✅）
+            self.emit_attr_name(target)
+            obj = self.emit_expr(receiver)
+            sep = self.emit_expr(positional[0])
+            self.emit("if (PyUnicode_CheckExact(" + obj + ")) {")
+            self.emit("    " + t + " = PyUnicode_Split(" + obj + ", " + sep + ", -1);")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("} else {")
+            self.emit("    PyObject *cratix_sm = PyObject_GetAttr(" + obj + ", " + self.attr_ref(target) + ");")
+            self.emit("    if (cratix_sm == NULL) goto cratix_error;")
+            self.emit("    " + t + " = PyObject_CallOneArg(cratix_sm, " + sep + ");")
+            self.emit("    Py_DECREF(cratix_sm);")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("}")
+            return True
+        if attr == "join" and len(positional) == 1:
+            # `sep.join(seq)` ✅ -> `PyUnicode_Join` ✅
+            self.emit_attr_name(target)
+            obj = self.emit_expr(receiver)
+            seq = self.emit_expr(positional[0])
+            self.emit("if (PyUnicode_CheckExact(" + obj + ")) {")
+            self.emit("    " + t + " = PyUnicode_Join(" + obj + ", " + seq + ");")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("} else {")
+            self.emit("    PyObject *cratix_jm = PyObject_GetAttr(" + obj + ", " + self.attr_ref(target) + ");")
+            self.emit("    if (cratix_jm == NULL) goto cratix_error;")
+            self.emit("    " + t + " = PyObject_CallOneArg(cratix_jm, " + seq + ");")
+            self.emit("    Py_DECREF(cratix_jm);")
+            self.emit("    if (" + t + " == NULL) goto cratix_error;")
+            self.emit("}")
+            return True
         if attr == "get" and len(positional) == 1:
             self.emit_attr_name(target)
             obj = self.emit_expr(receiver)
