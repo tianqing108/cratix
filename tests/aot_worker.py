@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_robust(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_robust.py", "cratix_corpus_robust", out_dir)
+    return {
+        "module_ok": mc.module_ok,
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "gen_inside": mod.gen_inside(),
+        "broken_body": mod.use_broken_body(),
+        "plain": mod.plain(4),
+    }
+
+
 def op_reraise(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_reraise.py", "cratix_corpus_reraise", out_dir)
     return {
@@ -482,6 +494,8 @@ def main() -> int:
             data = op_modern(out_dir)
         elif op == "reraise":
             data = op_reraise(out_dir)
+        elif op == "robust":
+            data = op_robust(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

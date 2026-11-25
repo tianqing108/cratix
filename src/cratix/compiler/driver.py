@@ -457,6 +457,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     lambda_gens: list = []
     lambda_names: dict = {}
     lambda_captures: dict = {}
+    # **没法编译的 lambda** ✅（外层函数用到它时必须回退 ✅ 不能静默 ✅）
+    lambda_blocked: set = set()
     for stmt in tree.body:
         if not isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
             continue
@@ -484,7 +486,13 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 }
                 captured = (used - param_names) & analysis.locals_
                 name = "_cratix_lambda_" + str(len(lambda_names))
-                built = builder.build_lambda(child)
+                try:
+                    built = builder.build_lambda(child)
+                except Unsupported as exc:
+                    # **lambda 里遇到不支持的语法** ✅ -> 这个 lambda 回退 ✅（外层函数用到它会回退 ✅）
+                    result.plans.append(FunctionPlan(name, False, exc.reason))
+                    lambda_blocked.add(key)
+                    continue
                 lambda_names[key] = name
                 # **捕获外层局部** ✅ -> 和嵌套 def 同一套 cell 机制 ✅
                 lambda_gens.append((name, built, sorted(captured)))
@@ -499,7 +507,13 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     consts = codegen.ConstantPool() if const_pool else None
     # **嵌套 def 也先生成** ✅（模块级原生函数 ✅；捕获的变量作为**隐藏首参** `_cratix_cells` ✅）
     for inner_name, inner_node, inner_captured in inner_gens:
-        inner_built = builder.build_function(inner_node)
+        try:
+            inner_built = builder.build_function(inner_node)
+        except Unsupported as exc:
+            # **嵌套 def 里遇到不支持的语法** ✅ -> 只要这个 def 回退 ✅ **不能拖垮整个模块** ✅
+            # （实测：嵌套的可调用体里有 `yield` 时以前会直接抛出去 ✅ -> 整个模块编译失败 ✅）
+            result.plans.append(FunctionPlan(inner_name, False, exc.reason))
+            continue
         raw_params = inner_built["params"]
         # **隐藏首参 = cell 字典** ✅（`functools.partial` 会把它绑在前面 ✅）——
         # 没有捕获时**不加** ✅（否则用户参数会错位 ✅ -> "missing required argument" ✅ 实测 ✅）
@@ -721,6 +735,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             # **方法装饰器** ✅（同样按逆序应用 ✅）
             "method_decorators": {},
         }
+        # **类体里遇到不支持的东西** ✅ -> 只把这个类降级成源码 exec ✅（不能拖垮整个模块 ✅）
+        class_broken = ""
         for item in stmt.body:
             if isinstance(item, ast.FunctionDef):
                 if item.decorator_list:
@@ -802,13 +818,28 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **类属性** ✅（含带注解的 `x: int = 0` ✅ —— 真实代码里到处是 ✅）
                 if isinstance(item, ast.AnnAssign):
                     if not isinstance(item.target, ast.Name) or item.value is None:
-                        raise Unsupported("类体语句：AnnAssign（无值或非简单名字）")
+                        class_broken = "类体语句：AnnAssign（无值或非简单名字）"
+                        break
                     class_info["attrs"].append((item.target.id, builder.build_expr(item.value)))
                 else:
                     target = item.targets[0]
                     if not isinstance(target, ast.Name):
-                        raise Unsupported("类属性赋值目标不是简单名字")
+                        class_broken = "类属性赋值目标不是简单名字"
+                        break
                     class_info["attrs"].append((target.id, builder.build_expr(item.value)))
+        if class_broken:
+            segment = _source_segment(source, stmt)
+            if segment:
+                fallback_classes.append((stmt.lineno, segment))
+                class_order = [
+                    (pos, name, True if name == stmt.name else is_fb)
+                    for (pos, name, is_fb) in class_order
+                ]
+                result.plans.append(FunctionPlan(stmt.name, False, class_broken))
+                continue
+            result.module_ok = False
+            result.module_reason = class_broken
+            return result
         result.classes.append(class_info)
 
     # --- 模块级 body ✅ ---

@@ -334,6 +334,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["nested"], "k:7")
         self.assertEqual(data["inner"], "inner")
 
+    def test_23_compile_robustness(self):
+        """**编译期健壮性** ✅：不支持的定义只降级自己 ✅，模块其余照常 AOT ✅。"""
+        data = run_worker("robust")
+        self.assertTrue(data["module_ok"], "单个定义不支持不该让整个模块编译失败")
+        # 模块里其它函数必须还在 AOT ✅
+        self.assertIn("plain", data["supported"])
+        self.assertIn("use_broken_body", data["supported"])
+        self.assertEqual(data["plain"], 12)
+        self.assertEqual(data["broken_body"], 7)
+        self.assertEqual(data["gen_inside"], 3)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

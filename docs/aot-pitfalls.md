@@ -142,6 +142,16 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：编译期崩溃（异常逃出编译器）✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 109 | 体检脚本在真实代码上**直接抛异常** ✅（不是回退 ✅） | `builder.build_function(inner_node)` 在 try **之外** ✅ -> 嵌套 def 里的 `yield` 一路抛到 `compile_module` ✅ | 只让**那一个嵌套 def** 回退 ✅（记进 plans ✅ 继续 ✅） |
+| 110 | 同上 ✅（另一个来源 ✅） | 类体循环里 `raise Unsupported` ✅，而只有 `check_class` 被 try 包住 ✅ | 改成 `class_broken = ...; break` ✅ -> 循环后把**这一个类**降级成源码 exec ✅ |
+
+**教训** ✅：编译器里**任何** `Unsupported` 都必须落在"只降级当前这一项"的边界内 ✅ ——
+漏在外面就是"整个模块编译失败" ✅（比回退糟得多 ✅）。
+
 ## 追加：裸 raise / 类体里的类 ✅
 
 | # | 现象 | 根因 | 修法 |
