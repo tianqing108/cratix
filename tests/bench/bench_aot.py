@@ -26,12 +26,13 @@ from cratix.compiler import driver, loader
 CORPUS = ROOT / "tests" / "corpus"
 
 # (语料, 函数, 参数, 迭代次数)
+# 迭代次数要够大 ✅ —— 否则测量窗口太小 ✅（0.01 ms 级 ✅）噪声压过信号 ✅ ✅。
 CASES = [
-    ("corpus_basic", "add", (2, 3), 200000),
-    ("corpus_basic", "control", (12,), 20000),
-    ("corpus_basic", "strings", ("bob", 3), 20000),
-    ("corpus_basic", "containers", ([1, 2, 3, 4, 5],), 20000),
-    ("corpus_basic", "mixed", (1, 2, 3, 4), 20000),
+    ("corpus_basic", "add", (2, 3), 2000000),
+    ("corpus_basic", "control", (12,), 200000),
+    ("corpus_basic", "strings", ("bob", 3), 200000),
+    ("corpus_basic", "containers", ([1, 2, 3, 4, 5],), 100000),
+    ("corpus_basic", "mixed", (1, 2, 3, 4), 200000),
 ]
 
 

@@ -17,6 +17,10 @@ from __future__ import annotations
 from ..frontend.subset import Unsupported
 
 
+# 向量调用的参数槽位上限 ✅（超出走通用路径 ✅ ✅）。
+MAX_VECTORCALL_ARGS = 16
+
+
 def c_ident(name: str) -> str:
     """Python 名字 -> C 标识符 ✅（加前缀避开 C 关键字 ✅）。"""
     out = []
@@ -128,6 +132,10 @@ def generate_function(gen: FunctionGen) -> str:
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
+    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
+    decls.append("    PyObject *cratix_kwnames = NULL;")
+    decls.append("    PyObject *cratix_mname = NULL;")
     cleanup = []
     # **cratix_kwv 是借用引用** ✅（PyDict_GetItemWithError ✅）—— **不能 DECREF** ✅
     # （多 DECREF 一次 ✅ → 提前释放 ✅ → 后续 use-after-free ✅ → 访问违例 ✅）
@@ -163,6 +171,10 @@ def module_body_parts(gen: FunctionGen):
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
+    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
+    decls.append("    PyObject *cratix_kwnames = NULL;")
+    decls.append("    PyObject *cratix_mname = NULL;")
     cleanup = []
     for name in gen.helper_names:
         cleanup.append("    Py_XDECREF(" + name + ");")
@@ -866,6 +878,72 @@ class FunctionGen:
             raise Unsupported("with（异常路径语义未实现）")
         raise Unsupported("语句：" + kind)
     # ---------- 表达式 ----------
+    def emit_fast_builtin(self, node, t) -> bool:
+        """内建函数**直译** ✅ —— 绕开通用调用开销 ✅。
+
+        CPython 3.14 的解释器有专门化快路径 ✅；我们走通用 C-API ✅ 会慢 ✅ ——
+        把最常见的内建换成直接的 C 调用 ✅ 就能明显改善 ✅ ✅。
+        """
+        target = node.kids[0]
+        if target.kind != "name" or node.get("keywords"):
+            return False
+        name = target.get("id")
+        args = node.kids[1:]
+        if name == "len" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PyLong_FromSsize_t(PyObject_Length(" + v + "));")
+            self.emit("if (PyErr_Occurred()) goto cratix_error;")
+            return True
+        if name in ("str", "repr") and len(args) == 1:
+            v = self.emit_expr(args[0])
+            fn = "PyObject_Str" if name == "str" else "PyObject_Repr"
+            self.emit(t + " = " + fn + "(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "int" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PyNumber_Long(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "float" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PyNumber_Float(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "abs" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PyNumber_Absolute(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "type" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PyObject_Type(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "list" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PySequence_List(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "tuple" and len(args) == 1:
+            v = self.emit_expr(args[0])
+            self.emit(t + " = PySequence_Tuple(" + v + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "isinstance" and len(args) == 2:
+            a = self.emit_expr(args[0])
+            b = self.emit_expr(args[1])
+            self.emit(t + " = PyObject_IsInstance(" + a + ", " + b + ");")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        if name == "hasattr" and len(args) == 2:
+            a = self.emit_expr(args[0])
+            b = self.emit_expr(args[1])
+            self.emit(t + " = PyObject_HasAttrString(" + a + ", PyUnicode_AsUTF8(" + b + "));")
+            self.emit("if (" + t + " == NULL) goto cratix_error;")
+            return True
+        return False
+
     def emit_expr(self, node) -> str:
         """表达式 -> C 语句序列 ✅；返回持有结果的临时变量名 ✅。"""
         kind = node.kind
@@ -927,6 +1005,10 @@ class FunctionGen:
             self.emit_boolop(node, t)
             return t
         if kind == "call":
+            if self.emit_fast_builtin(node, t):
+                return t
+            if self.emit_method_call(node, t):
+                return t
             self.emit_call(node, t)
             return t
         if kind == "ifexp":
@@ -1023,9 +1105,121 @@ class FunctionGen:
         self.emit(t + " = " + cur + ";")
         self.emit(cur + " = NULL;")
 
+    def emit_method_call(self, node, t) -> bool:
+        """方法调用 ✅ —— 走 `PyObject_VectorcallMethod` ✅。
+
+        **这是 CPython 3.14 解释器的 LOAD_METHOD 专门化路径** ✅ ——
+        它绕过**属性查找** ✅（直接用类型的方法槽 ✅ ✅）—— 通用路径最大的开销 ✅ ✅。
+        """
+        target = node.kids[0]
+        if target.kind != "attr":
+            return False
+        positional = []
+        keywords = []
+        for child in node.kids[1:]:
+            if child.kind == "starred":
+                return False
+            positional.append(child)
+        for name, child in node.get("keywords", []):
+            if name is None:
+                return False
+            keywords.append((name, child))
+        n_pos = len(positional)
+        n_kw = len(keywords)
+        n = n_pos + n_kw
+        if n + 1 > MAX_VECTORCALL_ARGS:
+            return False
+        obj = self.emit_expr(target.kids[0])
+        # **vargs[0] 是对象** ✅（VectorcallMethod 的约定 ✅ ✅）
+        self.emit("cratix_vargs[0] = " + obj + ";")
+        self.emit("Py_INCREF(cratix_vargs[0]);")
+        for i, child in enumerate(positional):
+            v = self.emit_expr(child)
+            self.emit("cratix_vargs[" + str(i + 1) + "] = " + v + ";")
+            self.emit("Py_INCREF(cratix_vargs[" + str(i + 1) + "]);")
+        if n_kw:
+            self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
+            self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
+            for j, (name, child) in enumerate(keywords):
+                v = self.emit_expr(child)
+                self.emit("cratix_vargs[" + str(n_pos + 1 + j) + "] = " + v + ";")
+                self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + 1 + j) + "]);")
+                self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
+                self.emit("if (cratix_kn == NULL) goto cratix_error;")
+                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
+        else:
+            self.emit("cratix_kwnames = NULL;")
+        self.emit("cratix_mname = PyUnicode_FromString(" + c_string(target.get("attr")) + ");")
+        self.emit("if (cratix_mname == NULL) goto cratix_error;")
+        self.emit(t + " = PyObject_VectorcallMethod(cratix_mname, cratix_vargs, " + str(n + 1) + " | PY_VECTORCALL_ARGUMENTS_OFFSET, cratix_kwnames);")
+        self.emit("Py_DECREF(cratix_mname);")
+        if n_kw:
+            self.emit("Py_DECREF(cratix_kwnames);")
+            self.emit("cratix_kwnames = NULL;")
+        # **VectorcallMethod 会取走参数的引用** ✅ —— 不能 DECREF ✅ ✅
+        self.emit("if (" + t + " == NULL) goto cratix_error;")
+        return True
+
     def emit_call(self, node, t) -> None:
-        """调用 ✅（位置 + 关键字 + 星号展开 ✅）。"""
+        """调用 ✅（位置 + 关键字 + 星号展开 ✅）。
+
+        **向量调用** ✅（PyObject_Vectorcall ✅）—— 省掉每次调用的元组分配 ✅ ✅
+        （CPython 3.14 的解释器也是这么做的 ✅ ✅）。
+        """
         func = self.emit_expr(node.kids[0])
+        positional = []
+        keywords = []
+        has_star = False
+        for child in node.kids[1:]:
+            if child.kind == "starred":
+                has_star = True
+                break
+            positional.append(child)
+        if not has_star:
+            for name, child in node.get("keywords", []):
+                if name is None:
+                    has_star = True
+                    break
+                keywords.append((name, child))
+        if not has_star:
+            self.emit_vectorcall(node, func, positional, keywords, t)
+            return
+        self.emit_call_generic(node, func, t)
+
+    def emit_vectorcall(self, node, func, positional, keywords, t) -> None:
+        """向量调用 ✅ —— 参数放在**连续**的栈数组里 ✅（vectorcall 要求 ✅）。"""
+        n_pos = len(positional)
+        n_kw = len(keywords)
+        n = n_pos + n_kw
+        # **参数多于预留槽位** ✅ -> 退回通用路径 ✅（避免越界 ✅ ✅）
+        if n > MAX_VECTORCALL_ARGS:
+            self.emit_call_generic(node, func, t)
+            return
+        for i, child in enumerate(positional):
+            v = self.emit_expr(child)
+            self.emit("cratix_vargs[" + str(i) + "] = " + v + ";")
+            self.emit("Py_INCREF(cratix_vargs[" + str(i) + "]);")
+        if n_kw:
+            self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
+            self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
+            for j, (name, child) in enumerate(keywords):
+                v = self.emit_expr(child)
+                self.emit("cratix_vargs[" + str(n_pos + j) + "] = " + v + ";")
+                self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + j) + "]);")
+                self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
+                self.emit("if (cratix_kn == NULL) goto cratix_error;")
+                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
+        else:
+            self.emit("cratix_kwnames = NULL;")
+        self.emit(t + " = PyObject_Vectorcall(" + func + ", cratix_vargs, " + str(n) + ", cratix_kwnames);")
+        if n_kw:
+            self.emit("Py_DECREF(cratix_kwnames);")
+            self.emit("cratix_kwnames = NULL;")
+        # **vectorcall 会取走参数的引用** ✅ —— 这里不能 DECREF ✅（否则双重释放 ✅）
+        self.emit("if (" + t + " == NULL) goto cratix_error;")
+
+    def emit_call_generic(self, node, func, t) -> None:
+        """通用调用 ✅（带星号展开 ✅）—— 走元组 ✅ ✅。"""
         args_list = self.new_tmp()
         self.emit(args_list + " = PyList_New(0);")
         self.emit("if (" + args_list + " == NULL) goto cratix_error;")
