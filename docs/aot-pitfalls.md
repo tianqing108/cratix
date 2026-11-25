@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：生成器表达式捕获 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 83 | 生成器表达式一旦引用外层局部就整函数回退 ✅ | 合成的是**模块级** Python 函数 ✅，看不见函数局部 ✅ | 合成函数多一个 `_cratix_cells` 首参 ✅；捕获名用 **AST 重写**成 `_cratix_cells["名字"]` ✅（不做字符串替换 ✅）；调用点 functools.partial 绑 cells ✅ |
+| 84 | `__file__` 被当成闭包自由变量 ✅ | 模块 dunder 不在 module_bindings 里 ✅ | 作用域分析把模块 dunder 当已知全局 ✅；模块 init 里补上真的 `__file__` ✅ |
+| 85 | if 里定义的嵌套 def 仍回退 ✅ | 只扫了函数体**第一层**语句 ✅ | `_nested_defs` 穿过 if/for/with/try 收集 ✅（不进更深的 def/lambda/class ✅） |
+
 ## 追加：模块级装饰器 ✅
 
 | # | 现象 | 根因 | 修法 |

@@ -143,6 +143,20 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_genexp_capture(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_genexp_capture.py", "cratix_corpus_genexp_capture", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "scaled": mod.scaled([1, 2, 3], 2),
+        "filtered": mod.filtered([1, 5, 9], 4),
+        "late": mod.late_binding([1, 2]),
+        "nested": mod.nested_rows([[1, 2], [3]], 10),
+        "global_scale": mod.uses_global([1, 2]),
+        "plain": mod.no_capture([1, 2]),
+    }
+
+
 def op_module_decorators(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_module_decorators.py", "cratix_corpus_module_decorators", out_dir)
     return {
@@ -382,6 +396,8 @@ def main() -> int:
             data = op_closures(out_dir)
         elif op == "module_decorators":
             data = op_module_decorators(out_dir)
+        elif op == "genexp_capture":
+            data = op_genexp_capture(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

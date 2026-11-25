@@ -252,6 +252,24 @@ def _module_level_supported(stmt) -> bool:
     return False
 
 
+def _nested_defs(func_node) -> list:
+    """收集 `func_node` 里**直接属于它**的嵌套 def ✅（可以夹在 if/for/with/try 里 ✅，
+    但不进更深一层的 def/lambda/class ✅ —— 那些归它们自己的父函数 ✅）。"""
+    found: list = []
+
+    def walk(node) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef):
+                found.append(child)
+            elif isinstance(child, (ast.Lambda, ast.ClassDef, ast.AsyncFunctionDef)):
+                continue
+            else:
+                walk(child)
+
+    walk(func_node)
+    return found
+
+
 def compile_module(path: Path, module_name: str | None = None, const_pool: bool = True) -> ModuleCompile:
     """把一个 Python 模块编译成 C ✅（函数级判定 ✅）。"""
     path = Path(path)
@@ -275,7 +293,11 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
 
     # --- 模块级绑定的名字 ✅（= 函数里的模块全局 ✅）---
     # **与黄金模型共用同一实现** ✅ —— 否则两边判定会漂移 ✅ ✅
-    module_globals = module_bindings(tree)
+    # **模块自带的 dunder** ✅（`__file__` 我们在 init 里补上 ✅）—— 不认它们的话 ✅
+    # 用到 `__file__` 的函数会被误判成"闭包捕获" ✅ 整函数回退 ✅。
+    module_globals = module_bindings(tree) | {
+        "__file__", "__name__", "__doc__", "__package__", "__loader__", "__spec__",
+    }
 
     # --- 类槽位预扫 ✅（函数生成时就要知道"哪些类有哪些槽位"）---
     class_slots_map: dict = {}
@@ -319,7 +341,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             continue
         for func_node in func_nodes:
             outer = analyze_function(func_node, module_globals)
-            for child in func_node.body:
+            # **受控流里包着的嵌套 def 也算** ✅（`if`/`for`/`with`/`try` 里面定义的 ✅）
+            for child in _nested_defs(func_node):
                 if not isinstance(child, ast.FunctionDef):
                     continue
                 inner_scope = analyze_function(child, module_globals)
@@ -348,6 +371,35 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         if owner is None:
             continue
         inner_cells.setdefault(owner, set()).update(_captured)
+
+    # **生成器表达式的捕获** ✅（(行, 列) -> 捕获的名字 ✅）——
+    # 有捕获时合成函数多一个 `_cratix_cells` 首参 ✅，用 `functools.partial` 绑上 ✅。
+    genexp_captures: dict = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef):
+            genexp_funcs = [stmt]
+        elif isinstance(stmt, ast.ClassDef):
+            genexp_funcs = [e for e in stmt.body if isinstance(e, ast.FunctionDef)]
+        else:
+            continue
+        for func_node in genexp_funcs:
+            outer = analyze_function(func_node, module_globals)
+            for child in ast.walk(func_node):
+                if not isinstance(child, ast.GeneratorExp):
+                    continue
+                key = (getattr(child, "lineno", 0), getattr(child, "col_offset", 0))
+                if key in genexp_captures:
+                    continue
+                targets = set()
+                for gen in child.generators:
+                    for sub in ast.walk(gen.target):
+                        if isinstance(sub, ast.Name):
+                            targets.add(sub.id)
+                used = {sub.id for sub in ast.walk(child) if isinstance(sub, ast.Name)}
+                captured = (used - targets) & outer.locals_
+                if captured:
+                    genexp_captures[key] = sorted(captured)
+                    inner_cells.setdefault(func_node.name, set()).update(captured)
 
     # --- lambda ✅：先扫出来 ✅，编译成**模块级原生函数** ✅（使用点按名字取 ✅）---
     lambda_gens: list = []
@@ -510,6 +562,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 lambda_captures=lambda_captures,
                 cell_names=inner_cells.get(stmt.name, set()),
                 inner_sites=inner_sites,
+                genexp_captures=genexp_captures,
             )
             gen.emit_binding()
             gen.emit_cells_init()
@@ -623,6 +676,9 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         lambda_captures=lambda_captures,
                         cell_names=inner_cells.get(item.name, set()),
                         inner_sites=inner_sites,
+                        genexp_captures=genexp_captures,
+                        # **类方法里的相对导入** ✅ 也要有包名 ✅
+                        package=module_name.rpartition(".")[0],
                     )
                     gen.emit_binding()
                     gen.emit_cells_init()
@@ -706,6 +762,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.func_meta,
         result.genexp_sources,
         result.decorated_functions,
+        source_file=str(path),
     )
     result.consts = consts
     return result
@@ -747,6 +804,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             func_meta=module_compile.func_meta,
             genexps=module_compile.genexp_sources,
             decorated_functions=module_compile.decorated_functions,
+            source_file=str(path),
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

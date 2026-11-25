@@ -154,10 +154,38 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
-def genexp_source(name: str, elt_src: str, gen_texts) -> str:
+def _rewrite_cells(expr_src: str, captured) -> str:
+    """把**捕获的名字**改写成 `_cratix_cells["名字"]` ✅（保语义 ✅ 晚绑定 ✅）。"""
+    import ast as _ast
+
+    tree = _ast.parse(expr_src, mode="eval")
+
+    class _Rewrite(_ast.NodeTransformer):
+        def visit_Name(self, node):
+            if node.id in captured and isinstance(node.ctx, _ast.Load):
+                return _ast.Subscript(
+                    value=_ast.Name(id="_cratix_cells", ctx=_ast.Load()),
+                    slice=_ast.Constant(value=node.id),
+                    ctx=_ast.Load(),
+                )
+            return node
+
+    return _ast.unparse(_ast.fix_missing_locations(_Rewrite().visit(tree)))
+
+
+def genexp_source(name: str, elt_src: str, gen_texts, captured=None) -> str:
     """合成**生成器函数**源码 ✅ —— 最外层可迭代对象由参数传入 ✅（立即求值 ✅）。"""
     nl = chr(10)
-    lines = ["def " + name + "(_cratix_it):"]
+    captured = set(captured or ())
+    if captured:
+        elt_src = _rewrite_cells(elt_src, captured)
+        gen_texts = [
+            (target, _rewrite_cells(iter_src, captured), [_rewrite_cells(c, captured) for c in ifs])
+            for target, iter_src, ifs in gen_texts
+        ]
+        lines = ["def " + name + "(_cratix_cells, _cratix_it):"]
+    else:
+        lines = ["def " + name + "(_cratix_it):"]
     depth = 1
     for index, (target_src, iter_src, ifs) in enumerate(gen_texts):
         iterable = "_cratix_it" if index == 0 else "(" + iter_src + ")"
@@ -373,7 +401,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  key_names: list, module_gen=None, alias_init: str | None = None,
                                  fallback_code: dict | None = None, classes: list | None = None,
                                  consts=None, func_meta=None, genexps=None,
-                                 decorated_functions=None) -> str:
+                                 decorated_functions=None, source_file="") -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -434,6 +462,14 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **模块字典要有 __builtins__** ✅ —— exec/eval 源码时（回退函数 ✅/跳板 ✅/lambda ✅）
     # CPython 会去 globals 找它 ✅；没有就往上找帧 ✅ -> 没有帧时 `KeyError: '__builtins__'` ✅（实测 ✅）
     out.append("    if (PyDict_SetItemString(cratix_globals, \"__builtins__\", cratix_builtins) < 0) return -1;")
+    if source_file:
+        # **`__file__` 保真** ✅ —— 源码路径在编译期就知道 ✅（运行期不去猜 ✅）
+        out.append("    {")
+        out.append("        PyObject *cratix_file = PyUnicode_FromString(" + c_string(source_file) + ");")
+        out.append("        if (cratix_file == NULL) return -1;")
+        out.append("        if (PyDict_SetItemString(cratix_globals, \"__file__\", cratix_file) < 0) { Py_DECREF(cratix_file); return -1; }")
+        out.append("        Py_DECREF(cratix_file);")
+        out.append("    }")
     for key in sorted(set(key_names)):
         out.append("    cratix_key_" + c_ident(key) + " = PyUnicode_InternFromString(" + q + key + q + ");")
         out.append("    if (cratix_key_" + c_ident(key) + " == NULL) return -1;")
@@ -933,7 +969,8 @@ class FunctionGen:
     def __init__(self, func_name, params, body, scope, consts=None, use_pool=True,
                  class_methods=None, self_attr_writes=None, method_mode=False,
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
-                 cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None):
+                 cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
+                 genexp_captures=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -943,6 +980,8 @@ class FunctionGen:
         self.inner_sites = dict(inner_sites or {})
         # **lambda 捕获表** ✅（(行, 列) -> 捕获的名字 ✅）
         self.lambda_captures = dict(lambda_captures or {})
+        # **生成器表达式的捕获表** ✅（(行, 列) -> 捕获的名字 ✅）
+        self.genexp_captures = dict(genexp_captures or {})
         self.closure_names = set(closure_names or ())
         self.cells_var = ""
         self.func_name = func_name
@@ -1245,6 +1284,10 @@ class FunctionGen:
         self.emit("Py_XDECREF(" + var + ");")
         self.emit(var + " = " + value + ";")
         self.emit(value + " = NULL;")
+        # **被更内层捕获** ✅ -> 也要镜像进 cell 字典 ✅
+        # （嵌套 def 的"赋值"没走 emit_assign ✅ -> 以前漏了 ✅ -> 内层 KeyError ✅ 实测 ✅）
+        if site["def_name"] in self.cell_names and self.cells_var:
+            self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(site["def_name"]) + ", " + var + ") < 0) goto cratix_error;")
 
     def bind_name(self, name: str, value_var: str) -> None:
         """把 value_var（**所有权转移** ✅）绑到名字上 ✅ —— 局部写局部 ✅，否则写模块全局 ✅。
@@ -2590,12 +2633,8 @@ class FunctionGen:
         if not gens:
             raise Unsupported("空生成器表达式")
         # **引用外层局部变量** ✅ -> 合不出来 ✅（合成函数是模块级的 ✅ 看不见函数局部 ✅）-> 整函数回退 ✅
-        outer = self._genexp_names(node)
-        captured = outer & (self.scope.locals_ | set(self.scope.free))
-        if captured:
-            raise Unsupported(
-                "生成器表达式引用了外层局部变量（" + ", ".join(sorted(captured)[:3]) + "）"
-            )
+        # **捕获外层局部** ✅ -> 合成函数多一个 `_cratix_cells` 首参 ✅（用 partial 绑定 ✅）
+        captured = set(self.genexp_captures.get(node.get("key")) or ())
         text = node.get("text") or {}
         elt_src = text.get("elt")
         gen_texts = text.get("gens") or []
@@ -2606,7 +2645,7 @@ class FunctionGen:
         while name in self.genexp_sources:
             index += 1
             name = "cratix_gen_" + c_ident(self.func_name) + "_" + str(index)
-        self.genexp_sources[name] = genexp_source(name, elt_src, gen_texts)
+        self.genexp_sources[name] = genexp_source(name, elt_src, gen_texts, captured)
         # **最外层可迭代对象立即求值** ✅
         first_iter = self.emit_expr(gens[0][1])
         helper = self.new_tmp()
@@ -2615,6 +2654,21 @@ class FunctionGen:
         self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: generator helper missing\");")
         self.emit("    goto cratix_error;")
         self.emit("}")
+        if captured:
+            if not self.cells_var:
+                raise Unsupported("生成器表达式捕获了变量但没有 cell 字典")
+            fmod = self.new_tmp()
+            part = self.new_tmp()
+            self.emit(fmod + " = PyImport_ImportModule(\"functools\");")
+            self.emit("if (" + fmod + " == NULL) goto cratix_error;")
+            self.emit(part + " = PyObject_GetAttrString(" + fmod + ", \"partial\");")
+            self.emit("Py_DECREF(" + fmod + ");")
+            self.emit(fmod + " = NULL;")
+            self.emit("if (" + part + " == NULL) goto cratix_error;")
+            self.emit(helper + " = PyObject_CallFunctionObjArgs(" + part + ", " + helper + ", " + self.cells_var + ", NULL);")
+            self.emit("Py_DECREF(" + part + ");")
+            self.emit(part + " = NULL;")
+            self.emit("if (" + helper + " == NULL) goto cratix_error;")
         self.emit(t + " = PyObject_CallOneArg(" + helper + ", " + first_iter + ");")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
 

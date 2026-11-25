@@ -165,7 +165,8 @@ class FunctionFallbackTest(unittest.TestCase):
         """生成器表达式 ✅ —— **真惰性** ✅，且引用外层局部变量时整函数回退 ✅。"""
         data = run_worker("genexp")
         # 只有"引用外层局部变量"的那个回退 ✅
-        self.assertEqual(data["fallback"], ["captured"])
+        # **生成器表达式捕获也支持了** ✅ -> 全部 AOT ✅（晚绑定 ✅）
+        self.assertEqual(data["fallback"], [])
         for name in ("total", "filtered", "nested", "lazy", "passthrough", "shadowed", "result"):
             self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
         self.assertTrue(data["helpers"], "应当合成生成器辅助函数")
@@ -257,6 +258,18 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["calls"], [10, "[12]", 55])
         self.assertTrue(data["cached"], "lru_cache 必须真的在缓存")
         self.assertEqual(data["fib"], 610)
+
+    def test_17_genexp_captures(self):
+        """生成器表达式**捕获外层局部** ✅（cells + AST 重写 ✅，晚绑定 ✅）。"""
+        data = run_worker("genexp_capture")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["scaled"], 12)
+        self.assertEqual(data["filtered"], [5, 9])
+        # **晚绑定** ✅：创建后把 offset 改成 10，生成器看到的是新值 ✅
+        self.assertEqual(data["late"], [11, 12])
+        self.assertEqual(data["nested"], 36)
+        self.assertEqual(data["global_scale"], 9)
+        self.assertEqual(data["plain"], 5)
 
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")

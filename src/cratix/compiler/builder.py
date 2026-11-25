@@ -319,6 +319,7 @@ def build_expr(node: ast.expr) -> ir.Node:
             build_expr(node.elt),
             *gens,
             text={"elt": ast.unparse(node.elt), "gens": texts},
+            key=(getattr(node, "lineno", 0), getattr(node, "col_offset", 0)),
         )
     if isinstance(node, (ast.ListComp, ast.SetComp)):
         gens = []
