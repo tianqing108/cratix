@@ -1,0 +1,30 @@
+[+0ms] [stub] host TLS index = 0 (pool=000002021958AED0 size=65536)
+[+0ms] [stub] exe = C:\project\cratix\examples\hello\build\public\hello_0.1.0.exe
+[+0ms] [stub] payload off=395776 size=15129014
+[+15ms] [stub] payload crc ok (0x1D19D741)
+[+15ms] [stub] zip entries = 600
+[+15ms] [stub] inflate ready (memdl zlib1.dll)
+[+15ms] [stub] CRT file IO hooked ✅
+[+15ms] [stub] python314.dll entry = found
+[+47ms] [stub] extracted 6785760 bytes
+[+47ms] [stub] A 形态：解释器内存映射 ✅ 不落盘 ✅
+[+47ms] [stub] loading interpreter (mode=mem)...
+[+47ms] [stub] loader hook: ok ✅
+[+62ms] [stub] map returned 00000202195A4430
+[+62ms] [stub] python314.dll mapped at 00000202195A4430 (6785760 bytes)
+[+62ms] [stub] interp TLS index=2 slots=000002021958AE60
+[+62ms] [stub] interp TLS block=00000202195DE020:[+62ms]  00000000000000000000000000000000000000000000000000000000000000000099e0c3f67f0000[+62ms] 
+[+62ms] [stub] note: interpreter does not import ntdll!__tls_get_addr
+[+62ms] [stub] IAT redirected: LoadLibraryExW/LoadLibraryW/GetProcAddress
+[+62ms] [stub] CRT _wstat64i32 redirect: ok ✅
+[+62ms] [stub] VFS hooked: python314.dll ✅
+[+62ms] [stub] _dup redirect: ok ✅
+[+62ms] [stub] api: init=00007FF6C3B59B90 isinit=00007FF6C3B59C64 finalize=00007FF6C3B59B7C run=00007FF6C3B62BFC errprint=00007FF6C3B62780
+[+62ms] [stub] Py_GetVersion = 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]
+[+62ms] [stub] api owner: base=00007FF6C3850000 init_off=3185552 owner=python314.dll
+[+62ms] [stub] ⚠ API 指针来自别的模块 ✅（双解释器 ✅）
+[+62ms] [stub] calling Py_InitializeEx...
+[+109ms] [stub] Python initialized
+[+109ms] [stub] loader apis: CFunc=00007FF6C3AFC364 AddModule=00007FF6C3B2E93C SetAttr=00007FF6C39A3DE8 BuildValue=00007FF6C38764E0
+[+109ms] [stub] cratix_loader 已就绪
+[+109ms] [stub] FAIL: 载荷里没有 runtime/cratix_bootstrap.pyd——打包不完整

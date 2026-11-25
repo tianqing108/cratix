@@ -1,0 +1,11 @@
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 本地配置（裁剪表等）
+cratix.local.toml

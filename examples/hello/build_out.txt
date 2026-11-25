@@ -1,0 +1,27 @@
+[cratix] 项目：hello 0.1.0  入口：hello.app:main
+[cratix] 目标：onefile, onedir  后端：pyc
+[cratix] 依赖闭包：2 个模块 / 2 个文件
+[payload] 第三方包 0 个 / 条目 0
+[payload] 项目条目：2
+[payload] 标准库条目：558
+[payload] 原生条目：3
+[payload] 标准库扩展模块：24
+[cratix] 补齐标准库扩展 DLL 依赖：9 个
+[payload] DEFLATE 预压 1 个条目（8 线程 ✅）：0.0 s ✅（缓存命中 561 ✅）
+
+构建完成 ✅
+  模块分类：aot 0 / pyc 2
+  载荷条目：600
+  产物：C:\project\cratix\examples\hello\build\public\hello_0.1.0.exe
+  产物：C:\project\cratix\examples\hello\build\public\hello_0.1.0
+  产物大小：15526102 字节
+  sha256：ee041d3ccefb8de6
+  阶段耗时：
+    依赖闭包                    0.01 s
+    标准库 + 项目 + 第三方          0.66 s
+    原生二进制 + PE 依赖闭包         0.26 s
+    编译（backend=pyc）         0.0 s
+    引导模块 + 清单               0.03 s
+    载荷写出 + stub 编译          10.83 s
+    拼装                      1.06 s
+  总耗时：12.91 s

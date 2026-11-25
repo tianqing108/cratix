@@ -1,0 +1,17 @@
+[project]
+name = "hello"
+version = "0.1.0"
+entry = "hello.app:main"
+
+[build]
+targets = ["onefile", "onedir"]
+console = true
+
+[compiler]
+backend = "pyc"
+probe = "on"
+
+[payload]
+exclude_modules = []
+exclude_stdlib = []
+exclude_packages = []

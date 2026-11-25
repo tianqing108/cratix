@@ -1,0 +1,41 @@
+[+0ms] [stub] host TLS index = 0 (pool=00000228EBCCAE80 size=65536)
+[+0ms] [stub] exe = C:\project\cratix\examples\hello\build\public\hello_0.1.0\hello.exe
+[+0ms] [stub] sidecar payload loaded (15129014 bytes)
+[+0ms] [stub] zip entries = 600
+[+16ms] [stub] inflate ready (memdl zlib1.dll)
+[+16ms] [stub] CRT file IO hooked ✅
+[+16ms] [stub] interpreter entry = native/python314.dll
+[+31ms] [stub] extracted 6785760 bytes
+[+31ms] [stub] A 形态：解释器内存映射 ✅ 不落盘 ✅
+[+31ms] [stub] loading interpreter (mode=mem)...
+[+47ms] [stub] loader hook: ok ✅
+[+62ms] [stub] map returned 00000228EBCE4030
+[+62ms] [stub] python314.dll mapped at 00000228EBCE4030 (6785760 bytes)
+[+62ms] [stub] interp TLS index=2 slots=00000228EBCCAE10
+[+62ms] [stub] interp TLS block=00000228EBD99EE0:[+62ms]  000000000000000000000000000000000000000000000000000000000000000000994830f77f0000[+62ms] 
+[+62ms] [stub] note: interpreter does not import ntdll!__tls_get_addr
+[+62ms] [stub] IAT redirected: LoadLibraryExW/LoadLibraryW/GetProcAddress
+[+62ms] [stub] CRT _wstat64i32 redirect: ok ✅
+[+62ms] [stub] VFS hooked: python314.dll ✅
+[+62ms] [stub] _dup redirect: ok ✅
+[+62ms] [stub] api: init=00007FF7301D9B90 isinit=00007FF7301D9C64 finalize=00007FF7301D9B7C run=00007FF7301E2BFC errprint=00007FF7301E2780
+[+62ms] [stub] Py_GetVersion = 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]
+[+62ms] [stub] api owner: base=00007FF72FED0000 init_off=3185552 owner=python314.dll
+[+62ms] [stub] ⚠ API 指针来自别的模块 ✅（双解释器 ✅）
+[+62ms] [stub] calling Py_InitializeEx...
+[+109ms] [stub] Python initialized
+[+109ms] [stub] loader apis: CFunc=00007FF73017C364 AddModule=00007FF7301AE93C SetAttr=00007FF730023DE8 BuildValue=00007FF72FEF64E0
+[+109ms] [stub] cratix_loader 已就绪
+Traceback (most recent call last):
+  File "<string>", line 2, in <module>
+  File "cratix/cratix_bootstrap.py", line 157, in cratix_boot
+  File "cratix/cratix_bootstrap.py", line 47, in _load_meta
+  File "cratix/cratix_bootstrap.py", line 41, in _read_entry
+  File "cratix/cratix_bootstrap.py", line 36, in _zip
+  File "C:\project\cratix\examples\hello\build\cratix\stage\stdlib_src\zipfile\__init__.py", line 1480, in __init__
+    self._RealGetContents()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\project\cratix\examples\hello\build\cratix\stage\stdlib_src\zipfile\__init__.py", line 1547, in _RealGetContents
+    raise BadZipFile("File is not a zip file")
+zipfile.BadZipFile: File is not a zip file
+[+359ms] [stub] FAIL(py): bootstrap 装载失败（cratix_boot 抛异常）
