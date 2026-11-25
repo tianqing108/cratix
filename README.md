@@ -23,7 +23,7 @@
 | M3 子集扩展 | 🟡 进行中（类 ✅ / try-except ✅ / with ✅ / 循环 else ✅ / 装饰器 ✅ / property ✅ / 推导式 ✅（含多生成器·解包·嵌套）/ **元数据保真 ✅**；生成器表达式待做） |
 | M4 增量/可复现 | ✅ 完成（指纹增量 + report.json + 可复现） |
 | M5 性能 | 🟡 基准已建立（实测 0.69×，诚实记录） |
-| M6 跨平台 | ⬜ 未开始 |
+| M6 跨平台 | 🟡 **四接口抽象 ✅ + Linux/macOS 占位 ✅**（Windows 全走接口 ✅，真实移植未做） |
 
 **当前可用能力**：`onefile` 单文件 exe 与 `onedir` 目录发行版构建 + 运行 + 零落盘 + 字节级可复现；
 `--backend aot` 用**自研编译器**把项目模块编成原生扩展并在运行期从内存加载 ✅；
@@ -122,6 +122,7 @@ src/cratix/
   packaging/          打包半边（vendor 自 cypack + cratix 自有增强）
     deps.py  pe.py  payload.py  assemble.py  stubbuild.py   # vendor
     defaults.py  sysdll.py  verify.py                       # cratix 自有
+  platforms/          平台接口（M6 ✅）：base 接口 + windows 实现 + linux/darwin 占位
   runtime/            随包运行的引导模块（单一 Python 源码）
   stub/               启动器 C 源码（memdl / VFS / TLS 修补 / zip 读取）
 scripts/vendor_sync.py  vendor 同步（改名 + 去业务化改写，幂等）

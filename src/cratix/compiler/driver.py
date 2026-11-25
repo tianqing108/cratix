@@ -16,6 +16,7 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import platforms
 from . import builder
 from .backend import codegen
 from .backend.runtime import HEADER_NAME, RUNTIME_H
@@ -423,14 +424,12 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
 def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path | None = None,
               alias_init: str | None = None, fingerprint: str | None = None,
               stamp_path: Path | None = None) -> Path:
-    """把生成的 C 编译成 .pyd ✅（MSVC ✅ —— 工具链定位复用 stubbuild ✅）。
+    """把生成的 C 编译成 .pyd ✅（工具链由**平台接口**提供 ✅ —— M6 ✅）。
 
     产物文件名用 **init 符号的末段** ✅（cratix_<hash>.pyd ✅）——
     这样标准的 ExtensionFileLoader 也能按名字找到 PyInit ✅（开发期测试方便 ✅）；
     打包后由 cratix_loader 按 meta.json 里的 init 显式调用 ✅（不依赖文件名 ✅）。
     """
-    from ..packaging import stubbuild
-
     python_prefix = Path(python_prefix or sys.base_prefix)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -461,19 +460,9 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")
 
-    vcvars = stubbuild.find_vcvars()
-    include = python_prefix / "include"
-    libs = python_prefix / "libs"
-    lib_name = "python%d%d.lib" % (sys.version_info.major, sys.version_info.minor)
-    cmd = (
-        'call "' + str(vcvars) + '" >nul && cd /d "' + str(out_dir) + '" && '
-        # **必须用 /MD** ✅（DLL CRT ✅）—— 扩展模块要与解释器用**同一个 CRT** ✅；
-        # 用 /MT（静态 CRT ✅）会让解释器用 DLL CRT 释放我们的内存 ✅ → 堆损坏 ✅。
-        'cl /nologo /O2 /MD /W3 /utf-8 /c /Brepro "' + c_path.name + '" /I"' + str(include) + '" '
-        '&& link /DLL /Brepro /OUT:"' + stem + '.pyd" "' + stem + '.obj" '
-        '/LIBPATH:"' + str(libs) + '" ' + lib_name
-    )
-    stubbuild.run_cmd(cmd)
+    # **只认平台接口** ✅（M6 ✅）—— 工具链细节在 platforms/windows.py ✅
+    plat = platforms.current()
+    plat.build_extension(c_path, pyd_path, python_prefix)
     pyd = pyd_path
     if not pyd.is_file():
         raise RuntimeError("未生成 .pyd：" + str(pyd))

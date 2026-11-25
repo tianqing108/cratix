@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, platforms
 from .build.pipeline import build
 from .config import ConfigError, find_config, load_config
 
@@ -97,9 +97,11 @@ def _cmd_verify(args) -> int:
         print("[cratix] 找不到产物（先跑 cratix build）", file=sys.stderr)
         return EXIT_RUNTIME_FAIL
     print(f"[cratix] 验证：{exe}")
+    # **平台接口** ✅（M6 ✅ —— 零落盘/无句柄启动都由平台实现 ✅）
+    plat = platforms.current()
     ok = True
     if args.zero_disk:
-        result = verify.zero_disk_check(exe)
+        result = plat.zero_disk_check(exe)
         print("[cratix] 零落盘复检：" + ("PASS" if result["zero_disk"] else "FAIL"))
         if result["runtime_files"]:
             print("  运行期新增文件：" + ", ".join(result["runtime_files"][:10]))
@@ -107,7 +109,7 @@ def _cmd_verify(args) -> int:
             print("  退出码 " + str(result["exit_code"]))
         ok = ok and result["ok"]
     if args.no_console:
-        result = verify.no_console_check(exe)
+        result = plat.no_console_check(exe)
         print(
             "[cratix] 无标准句柄启动："
             + ("PASS" if result["ok"] else "FAIL")
@@ -115,7 +117,7 @@ def _cmd_verify(args) -> int:
         )
         ok = ok and result["ok"]
     if not args.zero_disk and not args.no_console:
-        env = verify.sanitized_env({"CRATIX_ENTRY": "cratix_smoke:run"})
+        env = plat.sanitized_env({"CRATIX_ENTRY": "cratix_smoke:run"})
         proc = subprocess.Popen(
             [str(exe)],
             env=env,

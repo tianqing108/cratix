@@ -10,7 +10,7 @@
 | M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类 ✅ + try/except ✅ + with ✅ + 循环 else ✅ + 装饰器 ✅ + property ✅ + 推导式 ✅ 完成**；生成器表达式待做 |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | ✅ 完成（AOT 增量 ✅ 热构建 3.3s ✅；report.json ✅；可复现 ✅）|
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | 🟡 **基准已建立** ✅（实测 0.69× ✅ 诚实记录 ✅）；提速待做 ✅ |
-| M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | ⬜ 未开始 |
+| M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | 🟡 **接口 ✅ + 占位 ✅ + Windows 全走接口 ✅ 完成**；真实 Linux/macOS 实现未做 |
 
 ## M0/M1 已完成的事实
 
@@ -251,6 +251,28 @@
 
 **验收** ✅：`op_metadata` 把源码模块与 AOT 模块的 `doc/name/qualname/module/signature` 逐字段比对 ✅，
 零差异 ✅（`tests/test_fallback.py::test_09` ✅）。
+
+## M6 追加：四接口抽象 ✅
+
+**四件事跟平台绑死** ✅（其余链路本来就是通用的 ✅）：
+
+| # | 接口 | Windows 实现 | Linux / macOS |
+| --- | --- | --- | --- |
+| 1 | **工具链** ✅ `find_toolchain` / `run_command` / `build_extension` / `build_stub` | MSVC（vcvars ✅ + `cl`/`link` ✅） | **占位** ✅：明确抛 `PlatformUnsupported` ✅ |
+| 2 | **产物形态** ✅ `exe_suffix` / `extension_suffix` / `native_library_suffixes` | `.exe` / `.pyd` / (`.dll`,`.pyd`) | 占位里已声明 `.so` / `.dylib` ✅ |
+| 3 | **系统库判定** ✅ `is_system_library` / `resolve_library_alias` | 复用 `packaging/sysdll.py` ✅ | 占位（返回 False ✅） |
+| 4 | **运行期校验** ✅ `zero_disk_check` / `no_console_check` / `sanitized_env` | 复用 `packaging/verify.py` ✅ | 占位（抛不支持 ✅） |
+
+**做法** ✅：`src/cratix/platforms/` 下 `base.py`（接口 ✅）+ `windows.py`（**薄壳转接**已实现的模块 ✅）
++ `linux.py` / `darwin.py`（占位 ✅，顶部留了**实现要点** ✅）+ `__init__.py`（`current()` ✅）。
+
+**调用方全部改走接口** ✅：`build/pipeline.py` ✅、`cli.py` ✅、`compiler/driver.py` ✅ ——
+不再直接 import `stubbuild` / `sysdll` / `verify` ✅。
+
+**验收** ✅：`tests/test_platforms.py`（12 项 ✅）——
+接口完整性 ✅、占位平台对**每个**接口调用都必须抛 `PlatformUnsupported` ✅、
+未知平台明确报错 ✅、**源码守卫**（pipeline/cli/driver 里不许再出现 `stubbuild.` / `sysdll.` / `verify.` ✅ 且必须调用 `platforms.current()` ✅）。
+端到端 ✅：示例工程仍然构建成功 ✅、两次构建 sha256 一致 ✅、`verify --zero-disk` 走平台接口 PASS ✅。
 
 ## 下一步
 
