@@ -183,6 +183,30 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **实测** ✅：closures ✅ / genexp ✅ / lambda ✅ / 局部类 ✅ / 普通类 5 个语料 **泄漏 0** ✅；
 全量标准库仍是 **0 崩溃** ✅、AOT **36139**（0.954 ✅）；`examples/notes` 冻结 exe `probe_frozen` **6/6** ✅。
 
+**第三轮（装饰器跳板也搬走 ✅）：把"按名字查"改成"当参数传"** ✅
+
+跳板是**普通 Python 函数** ✅，它引用被装饰函数时查的是 `__globals__` ✅ ——
+所以只要它按**名字**找 ✅，那个名字就只能留在模块命名空间里 ✅。
+
+**改法** ✅：生成一个**工厂** ✅：
+
+```python
+def _cratix_mk_<名字>(_cratix_fn):
+    def _cratix_tb_<名字>(<真实签名>):
+        return _cratix_fn(<按位置转发>)
+    return _cratix_tb_<名字>
+```
+
+C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **不再有名字查找** ✅，
+于是 `_cratix_raw_*` ✅ `_cratix_tb_*` ✅ `_cratix_<类>_<方法>` ✅ **全部搬进 `cratix_helper_ns`** ✅。
+
+**实测** ✅：`corpus_decorators`（含 `@property` ✅ `@classmethod` ✅ `@staticmethod` ✅ 自定义装饰器 ✅）
+**泄漏 0** ✅；`test_32_namespace_clean` 的**豁免全部删掉** ✅，5 个语料仍然全绿 ✅；
+91 项测试全绿 ✅、全量标准库 0 崩溃 ✅、AOT 36139 ✅、`probe_frozen` 6/6 ✅。
+
+**教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
+私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
+
 ## 追加：#136 **语句组合差分**（两个"硬失败"被改成明确回退 ✅）
 
 第三个差分语料 `tests/corpus/corpus_statements.py` ✅：

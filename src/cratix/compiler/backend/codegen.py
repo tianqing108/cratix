@@ -272,6 +272,39 @@ def trampoline_source(tb_name: str, private: str, params) -> str:
     )
 
 
+def trampoline_factory_source(factory: str, tb_name: str, params) -> str:
+    """**工厂版跳板** ✅ —— 被装饰的函数以**参数**传进来 ✅，不按名字查 globals ✅（#129 ✅）。
+
+    为什么必须这样 ✅：跳板是**普通 Python 函数** ✅，它引用别的名字时查的是
+    `__globals__`（= 模块字典）✅ —— 于是那个私有名只能留在模块命名空间里 ✅。
+    改成"把函数当参数传"之后 ✅，私有名可以彻底删掉 ✅。
+    """
+    nl = chr(10)
+    names = list(params.get("names", []))
+    defaults = list(params.get("defaults", []))
+    generic = (
+        "    def " + tb_name + "(self, *args, **kwargs):" + nl
+        + "        return _cratix_fn(self, *args, **kwargs)" + nl
+    )
+    if params.get("vararg") or params.get("kwarg") or params.get("kwonly"):
+        return "def " + factory + "(_cratix_fn):" + nl + generic + "    return " + tb_name + nl
+    parts = []
+    for index, name in enumerate(names):
+        node = defaults[index] if index < len(defaults) else None
+        if node is None:
+            parts.append(name)
+            continue
+        if node.kind != "const":
+            return "def " + factory + "(_cratix_fn):" + nl + generic + "    return " + tb_name + nl
+        parts.append(name + "=" + repr(node.get("value")))
+    forwarded = ", ".join(names)
+    body = (
+        "    def " + tb_name + "(" + ", ".join(parts) + "):" + nl
+        + "        return _cratix_fn(" + forwarded + ")" + nl
+    )
+    return "def " + factory + "(_cratix_fn):" + nl + body + "    return " + tb_name + nl
+
+
 def method_doc(name: str, meta) -> str:
     """CPython 的 ml_doc 约定 ✅：文本签名 + 分隔符 + 文档 ✅。"""
     if not meta:
@@ -609,15 +642,20 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        Py_INCREF(cratix_raw);")
         # **私有名留在 globals** ✅ —— 跳板是 **Python 函数** ✅，它按名字查 `__globals__` ✅，
         # 所以这些名字必须在模块字典里 ✅（#129 的"装饰器跳板"部分留待下一轮 ✅）。
-        out.append("        if (PyDict_SetItemString(cratix_globals, " + c_string(raw_name) + ", cratix_raw) < 0) { Py_DECREF(cratix_raw); return -1; }")
-        out.append("        Py_DECREF(cratix_raw);")
-        tb_source = trampoline_source(tb_name, raw_name, {"names": [], "vararg": "cratix_args", "kwarg": "cratix_kw"})
-        out.append("        PyObject *cratix_tb = PyRun_String(" + c_string(tb_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+        # **不再需要私有名** —— 函数对象直接传给工厂 ✅
+        pass  # cratix_raw 的引用留到工厂调用之后再放
+        # **工厂版** ✅：把被装饰函数当参数传 ✅（这样 `_cratix_raw_*` 不必留在 globals ✅）
+        factory_name = "_cratix_mk_" + func_name
+        tb_source = trampoline_factory_source(factory_name, tb_name, {"names": [], "vararg": "cratix_args", "kwarg": "cratix_kw"})
+        out.append("        PyObject *cratix_tb = PyRun_String(" + c_string(tb_source) + ", Py_file_input, cratix_globals, cratix_helper_ns);")
         out.append("        if (cratix_tb == NULL) return -1;")
         out.append("        Py_DECREF(cratix_tb);")
-        out.append("        PyObject *cratix_fn = PyDict_GetItemString(cratix_globals, " + c_string(tb_name) + ");")
+        out.append("        PyObject *cratix_fac = PyDict_GetItemString(cratix_helper_ns, " + c_string(factory_name) + ");")
+        out.append("        if (cratix_fac == NULL) return -1;")
+        out.append("        PyObject *cratix_fn = PyObject_CallOneArg(cratix_fac, cratix_raw);")
+        out.append("        Py_DECREF(cratix_raw);")
         out.append("        if (cratix_fn == NULL) return -1;")
-        out.append("        Py_INCREF(cratix_fn);")
+        pass  # cratix_raw 的引用留到工厂调用之后再放
         for segment in reversed([s for s in decorator_sources if s]):
             out.append("        {")
             out.append("            PyObject *dec = PyRun_String(" + c_string(segment) + ", Py_eval_input, cratix_globals, cratix_globals);")
@@ -752,7 +790,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                 continue
             tb_name = "_cratix_tb_" + cls["name"] + "_" + method_name
             private = "_cratix_" + cls["name"] + "_" + method_name
-            src = trampoline_source(tb_name, private, _gen.params)
+            # **工厂版** ✅：把私有函数当参数传 ✅ -> 私有名与跳板名都不用进模块 globals ✅
+            src = trampoline_factory_source("_cratix_mk_" + cls["name"] + "_" + method_name, tb_name, _gen.params)
             out.append("static const char *cratix_tb_" + c_ident(cls["name"] + "." + method_name) + " = " + c_string(src) + ";")
         out.append("")
     out.append("static struct PyModuleDef cratix_module = {")
@@ -846,7 +885,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("        {")
             out.append("            PyObject *fn = PyCFunction_NewEx(&" + table + "[" + str(idx) + "], NULL, NULL);")
             out.append("            if (fn == NULL) { Py_DECREF(m); return NULL; }")
-            out.append("            if (PyDict_SetItemString(cratix_globals, " + q + "_cratix_" + cls["name"] + "_" + method_name + q + ", fn) < 0) { Py_DECREF(fn); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyDict_SetItemString(cratix_helper_ns, " + q + "_cratix_" + cls["name"] + "_" + method_name + q + ", fn) < 0) { Py_DECREF(fn); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(fn);")
             out.append("        }")
         for method_name, _gen in cls.get("methods", []):
@@ -854,7 +893,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                 continue
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             out.append("        {")
-            out.append("            PyObject *t = PyRun_String(cratix_tb_" + c_ident(cls["name"] + "." + method_name) + ", Py_file_input, cratix_globals, cratix_globals);")
+            out.append("            PyObject *t = PyRun_String(cratix_tb_" + c_ident(cls["name"] + "." + method_name) + ", Py_file_input, cratix_globals, cratix_helper_ns);")
             out.append("            if (t == NULL) { Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(t);")
             out.append("        }")
@@ -925,7 +964,11 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             decorators = (cls.get("method_decorators") or {}).get(method_name) or []
             out.append("        {")
-            out.append("            PyObject *tbv = PyDict_GetItemString(cratix_globals, " + q + tb + q + ");")
+            out.append("            PyObject *facv = PyDict_GetItemString(cratix_helper_ns, " + q + "_cratix_mk_" + cls["name"] + "_" + method_name + q + ");")
+            out.append("            if (facv == NULL) { Py_DECREF(m); return NULL; }")
+            out.append("            PyObject *privv = PyDict_GetItemString(cratix_helper_ns, " + q + "_cratix_" + cls["name"] + "_" + method_name + q + ");")
+            out.append("            if (privv == NULL) { Py_DECREF(m); return NULL; }")
+            out.append("            PyObject *tbv = PyObject_CallOneArg(facv, privv);")
             out.append("            if (tbv == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
             out.append("            Py_INCREF(tbv);")
             out.append("            PyObject *mn = PyUnicode_FromString(" + q + method_name + q + ");")

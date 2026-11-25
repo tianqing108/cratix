@@ -205,15 +205,8 @@ def op_namespace(out_dir: Path) -> dict:
         mc, mod = _compile(corpus, "cratix_ns_" + path.stem, out_dir)
         # **装饰器跳板**（`_cratix_tb_*` / `_cratix_raw_*`）暂时留在 globals ✅ ——
         # 它们是 **Python 函数** ✅，按名字查 `__globals__` ✅（下一轮改成"把函数当参数传"就能搬走 ✅）。
-        def _is_leak(name: str) -> bool:
-            if name.startswith("_cratix_tb_") or name.startswith("_cratix_dtb_") or name.startswith("_cratix_raw_"):
-                return False
-            if name.startswith("_cratix_") and "_" in name[9:]:
-                # 类方法跳板用 `_cratix_<类>_<方法>` ✅
-                return False
-            return name.startswith("cratix_") or name.startswith("_cratix_")
-
-        names = [n for n in dir(mod) if _is_leak(n)]
+        # **不再有任何豁免** ✅ —— 装饰器跳板也改成"把函数当参数传"了 ✅（#129 收尾 ✅）
+        names = [n for n in mod.__dict__ if n.startswith("cratix_") or n.startswith("_cratix_")]
         if names:
             leaked[corpus] = names[:8]
     return {"leaked": leaked}
