@@ -1582,23 +1582,67 @@ class FunctionGen:
         raise Unsupported("赋值目标：" + kind)
 
     def emit_unpack(self, target, value_var: str) -> None:
-        """序列解包 ✅（v1 不支持星号解包 ✅ → 整函数回退 ✅）。"""
+        """序列解包 ✅ —— 含**星号解包** ✅（`first, *rest = items` ✅）。
+
+        语义 ✅：星号拿到的**一定是 list** ✅（与 CPython 一致 ✅）；
+        元素不够 ✅ -> ValueError ✅（"not enough values" ✅）。
+        """
         kids = list(target.kids)
-        for kid in kids:
-            if kid.kind == "starred":
-                raise Unsupported("星号解包")
+        star_index = next((i for i, kid in enumerate(kids) if kid.kind == "starred"), None)
+        if star_index is not None:
+            self.emit_unpack_starred(target, kids, star_index, value_var)
+            return
         seq = self.new_tmp()
         self.emit(seq + " = PySequence_Fast(" + value_var + ", NULL);")
         self.emit("if (" + seq + " == NULL) goto cratix_error;")
-        self.emit("if (PyTuple_GET_SIZE(" + seq + ") != " + str(len(kids)) + ") {")
+        # **必须用 PySequence_Fast_* 宏** ✅ —— `PySequence_Fast` 对 list 输入返回的是**list** ✅，
+        # 用 PyTuple_GET_ITEM 会触发 CPython 的断言 ✅（实测：`Assertion failed: PyTuple_Check(op)` ✅）。
+        self.emit("if (PySequence_Fast_GET_SIZE(" + seq + ") != " + str(len(kids)) + ") {")
         self.emit("    PyErr_SetString(PyExc_ValueError, \"cratix: unpack count mismatch\");")
         self.emit("    goto cratix_error;")
         self.emit("}")
         for i, kid in enumerate(kids):
             item = self.new_tmp()
-            self.emit(item + " = PyTuple_GET_ITEM(" + seq + ", " + str(i) + ");")
+            self.emit(item + " = PySequence_Fast_GET_ITEM(" + seq + ", " + str(i) + ");")
             self.emit("Py_INCREF(" + item + ");")
             self.emit_assign(kid, item)
+        self.emit("Py_DECREF(" + seq + ");")
+        self.emit(seq + " = NULL;")
+
+    def emit_unpack_starred(self, target, kids, star_index: int, value_var: str) -> None:
+        """`a, *b, c = seq` ✅ —— 用列表做 ✅（星号就是切片 ✅）。"""
+        seq = self.new_tmp()
+        self.emit(seq + " = PySequence_List(" + value_var + ");")
+        self.emit("if (" + seq + " == NULL) goto cratix_error;")
+        prefix = star_index
+        suffix = len(kids) - star_index - 1
+        self.emit("if (PyList_GET_SIZE(" + seq + ") < " + str(prefix + suffix) + ") {")
+        self.emit("    Py_DECREF(" + seq + ");")
+        self.emit("    " + seq + " = NULL;")
+        self.emit("    PyErr_SetString(PyExc_ValueError, \"cratix: not enough values to unpack\");")
+        self.emit("    goto cratix_error;")
+        self.emit("}")
+        for i in range(prefix):
+            item = self.new_tmp()
+            self.emit(item + " = PyList_GET_ITEM(" + seq + ", " + str(i) + ");")
+            self.emit("Py_INCREF(" + item + ");")
+            self.emit_assign(kids[i], item)
+        star_kid = kids[star_index]
+        inner = star_kid.kids[0] if star_kid.kids else None
+        rest = self.new_tmp()
+        self.emit(rest + " = PyList_GetSlice(" + seq + ", " + str(prefix) + ", PyList_GET_SIZE(" + seq + ") - " + str(suffix) + ");")
+        self.emit("if (" + rest + " == NULL) { Py_DECREF(" + seq + "); " + seq + " = NULL; goto cratix_error; }")
+        if inner is not None:
+            self.emit_assign(inner, rest)
+        else:
+            self.emit("Py_DECREF(" + rest + ");")
+            self.emit(rest + " = NULL;")
+        for i in range(suffix):
+            index = "PyList_GET_SIZE(" + seq + ") - " + str(suffix - i)
+            item = self.new_tmp()
+            self.emit(item + " = PyList_GET_ITEM(" + seq + ", " + index + ");")
+            self.emit("Py_INCREF(" + item + ");")
+            self.emit_assign(kids[star_index + 1 + i], item)
         self.emit("Py_DECREF(" + seq + ");")
         self.emit(seq + " = NULL;")
 

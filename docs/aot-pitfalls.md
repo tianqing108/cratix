@@ -142,6 +142,13 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：星号解包 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 88 | `a, b = some_list` 直接把进程**断言中止** ✅ | `PySequence_Fast` 对 list 输入返回 **list** ✅，而解包用了 `PyTuple_GET_ITEM` ✅ -> CPython 断言 `PyTuple_Check(op)` ✅ | 改用 `PySequence_Fast_GET_ITEM` / `PySequence_Fast_GET_SIZE` ✅（对 list/tuple 都对 ✅） |
+| 89 | `first, *rest = items` 整函数回退 ✅（`containers` 因此只有 0.99× ✅） | 星号解包没实现 ✅ | `PySequence_List` + 前缀索引 + `PyList_GetSlice` 当星号 + 后缀倒取 ✅；元素不够 `ValueError` ✅ |
+
 ## 追加：内建方法直译 ✅
 
 | # | 现象 | 根因 | 修法 |

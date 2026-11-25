@@ -271,6 +271,19 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["global_scale"], 9)
         self.assertEqual(data["plain"], 5)
 
+    def test_18_starred_unpack(self):
+        """**星号解包** ✅（`a, *b, c = seq` ✅）与普通解包 ✅（list 输入也要对 ✅）。"""
+        data = run_worker("unpack")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["head_rest"], [1, [2, 3]])
+        self.assertEqual(data["split_middle"], [1, [2, 3], 4])
+        self.assertEqual(data["no_suffix"], [9, [8]])
+        self.assertEqual(data["starred_only"], [1, 2, 3])
+        self.assertEqual(data["swap"], [2, 1])
+        self.assertEqual(data["nested"], 6)
+        # 元素不够 -> ValueError ✅（与 CPython 一致 ✅）
+        self.assertEqual(data["short"], "ValueError")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

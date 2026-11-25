@@ -482,7 +482,23 @@ Python 语义正好对上 ✅：最外层可迭代对象**立即求值** ✅，�
 
 **覆盖率** ✅：自测语料 **0.98 → 0.99+** ✅（只剩 1 个生成器函数回退 ✅ —— 那本来就和 .pyc 等价 ✅）。
 
-**下一步** ✅：属性/类型特化继续（`loop_num 1.15×` / `strings 1.00×`）。
+**追加：星号解包 ✅**（`first, *rest = items` ✅）
+
+以前一律整函数回退 ✅（`corpus_basic.containers` 就是这么掉到 0.99× 的 ✅ ——
+它回退到 .pyc ✅，和源码基本等速 ✅）。
+
+**做法** ✅：`PySequence_List` 转列表 ✅ -> 前缀按索引取 ✅ / 星号用 `PyList_GetSlice` 切片 ✅ /
+后缀从**尾部**倒着取 ✅；元素不够 -> `ValueError` ✅（与 CPython 一致 ✅）。
+
+**顺手修的真 bug** ✅：普通解包用的是 `PyTuple_GET_ITEM` ✅，但 `PySequence_Fast` 对 **list 输入
+返回的是 list** ✅ -> CPython 断言 `PyTuple_Check(op)` 直接**进程中止** ✅。
+改用 `PySequence_Fast_GET_ITEM` / `PySequence_Fast_GET_SIZE` ✅。
+
+**实测** ✅（`--repeat 5` ✅）：`containers` **0.99× → 1.14×** ✅、
+`GEO-MEAN(corpus_basic)` **1.14× → 1.18×** ✅、`GEO-MEAN(全部)` **1.17× → 1.21×** ✅、
+加权总速 **1.22×** ✅。`corpus_basic` 只剩 `strings` 0.99×（其他 4 个都 ≥1.1× ✅）。
+
+**下一步** ✅：字符串路径（`strings` 0.99× ✅）。
 
 ## 下一步
 

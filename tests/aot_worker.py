@@ -143,6 +143,26 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_unpack(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_unpack.py", "cratix_corpus_unpack", out_dir)
+    short = None
+    try:
+        mod.split_middle([1])
+    except ValueError as exc:
+        short = "ValueError"
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "head_rest": list(mod.head_rest([1, 2, 3])),
+        "split_middle": list(mod.split_middle([1, 2, 3, 4])),
+        "no_suffix": list(mod.no_suffix([9, 8])),
+        "starred_only": mod.starred_only([1, 2, 3]),
+        "swap": list(mod.swap([1, 2])),
+        "nested": mod.nested_unpack([[1, 2], 3]),
+        "short": short,
+    }
+
+
 def op_genexp_capture(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_genexp_capture.py", "cratix_corpus_genexp_capture", out_dir)
     return {
@@ -398,6 +418,8 @@ def main() -> int:
             data = op_module_decorators(out_dir)
         elif op == "genexp_capture":
             data = op_genexp_capture(out_dir)
+        elif op == "unpack":
+            data = op_unpack(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

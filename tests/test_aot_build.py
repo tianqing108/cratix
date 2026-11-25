@@ -42,7 +42,8 @@ class AotBuildTest(unittest.TestCase):
     def test_01_basic_module(self):
         data = run_worker("basic")
         self.assertIn("add", data["supported"])
-        self.assertIn("containers", data["fallback"])
+        # **星号解包已支持** ✅ -> containers 也能 AOT 了 ✅（以前这里靠回退 ✅）
+        self.assertNotIn("containers", data["fallback"])
         self.assertEqual(data["add"], 7)
         self.assertEqual(data["control"], [0, -1, 2, 4, -5, 6, "done"])
         # 源码用 f"...{name!r}..." ✅ -> repr 带引号 ✅（AOT 与源码一致 ✅）
