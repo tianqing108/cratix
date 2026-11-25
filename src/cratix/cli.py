@@ -45,6 +45,7 @@ def _cmd_build(args) -> int:
         "icon": args.icon or None,
         "backend": args.backend,
         "probe": args.probe,
+        "strict_aot": True if getattr(args, "strict_aot", False) else None,
     }
     cfg = load_config(config_path, overrides)
     print(f"[cratix] 项目：{cfg.name} {cfg.version}  入口：{cfg.entry}")
@@ -193,6 +194,11 @@ def main(argv: list[str] | None = None) -> int:
     p_build.add_argument("--icon", default="", help="exe 图标（.ico）")
     p_build.add_argument("--backend", choices=["pyc", "aot"], help="编译后端")
     p_build.add_argument("--probe", choices=["on", "off", "strict"], help="差分探针模式")
+    p_build.add_argument(
+        "--strict-aot",
+        action="store_true",
+        help="AOT 严格模式：任何函数/模块回退都让构建失败（CI 用）",
+    )
     p_build.set_defaults(func=_cmd_build)
 
     p_deps = sub.add_parser("deps", help="打印依赖闭包")

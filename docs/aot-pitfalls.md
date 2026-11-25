@@ -142,6 +142,12 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：构建日志与控制台编码 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 71 | 测试通过管道跑时 3 个用例全报 ERROR ✅，重定向到文件却全 OK ✅ | 构建日志含 ✅ 等非 ASCII ✅，**GBK 控制台/管道**下 print 抛 UnicodeEncodeError ✅ 直接打断构建 ✅ | build() 入口统一 reconfigure(utf-8, errors=replace) ✅（CLI 早已如此 ✅，库调用也要 ✅） |
+
 ## 追加：实例结构体 / 属性槽位 ✅
 
 | # | 现象 | 根因 | 修法 |

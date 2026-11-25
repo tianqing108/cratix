@@ -34,6 +34,8 @@ class Config:
     icon: Path | None = None
     backend: str = "pyc"
     probe: str = "on"
+    # **AOT 严格模式** ✅：任何函数回退 / 模块回退都算构建失败 ✅（CI 用 ✅）
+    strict_aot: bool = False
     scope: str = "project"
     packages: list[str] = field(default_factory=list)
     skip: list[str] = field(default_factory=list)
@@ -153,6 +155,10 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> Conf
     if overrides.get("entry"):
         cfg.entry = str(overrides["entry"])
         cfg.entry_module, cfg.entry_attr = _split_entry(cfg.entry)
+    if cfg.backend == "aot":
+        cfg.strict_aot = bool(compiler.get("strict_aot", False))
+    if overrides.get("strict_aot") is not None:
+        cfg.strict_aot = bool(overrides["strict_aot"])
     if overrides.get("console") is not None:
         cfg.console = bool(overrides["console"])
     if overrides.get("icon"):
