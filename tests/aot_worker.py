@@ -143,6 +143,31 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_leaks(out_dir: Path) -> dict:
+    """**引用释放** ✅ —— 用 getrefcount 直接量泄漏 ✅（确定性 ✅，不靠内存采样 ✅）。"""
+    mc, mod = _compile("corpus_leaks.py", "cratix_corpus_leaks", out_dir)
+    results = {"supported": sorted(mc.supported_names)}
+
+    class Sentry:
+        pass
+
+    cases = [
+        ("loop_refs", 200),
+        ("comp_refs", 50),
+        ("with_continue", 100),
+        ("with_break", 10),
+        ("try_refs", 100),
+    ]
+    for name, n in cases:
+        sentry = Sentry()
+        before = sys.getrefcount(sentry)
+        value = getattr(mod, name)(sentry, n)
+        after = sys.getrefcount(sentry)
+        results[name + "_delta"] = after - before
+        results[name + "_value"] = value
+    return results
+
+
 def op_fallback(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_unsupported.py", "cratix_corpus_unsup", out_dir)
     return {
@@ -179,6 +204,8 @@ def main() -> int:
             data = op_decorators(out_dir)
         elif op == "comprehensions":
             data = op_comprehensions(out_dir)
+        elif op == "leaks":
+            data = op_leaks(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

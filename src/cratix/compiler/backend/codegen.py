@@ -976,8 +976,40 @@ class FunctionGen:
         self.emit("{")
         self.emit("    int " + depth_var + " = cratix_try_n;")
         self.emit("    int " + broke_var + " = 0;")
-        self.loop_stack.append({"depth": depth_var, "broke": broke_var})
+        self.loop_stack.append({
+            "depth": depth_var,
+            "broke": broke_var,
+            "tmp": self.tmp_index,
+            "helpers": len(self.helper_names),
+        })
         return depth_var, broke_var
+
+    def emit_tmp_cleanup(self, mark: int, indent: str = "    ") -> None:
+        """释放**循环体/推导式内**产生的临时变量 ✅（每次迭代都要放 ✅）。
+
+        不这么做 ✅：临时变量是**函数级复用**的 C 变量 ✅ ——
+        每轮直接覆盖 ✅ -> **每轮泄漏一个引用** ✅（实测：长循环内存线性增长 ✅ + 分配器压力 ✅）。
+        """
+        for name in self.tmp_names[mark:]:
+            self.emit(indent + "Py_XDECREF(" + name + ");")
+            self.emit(indent + name + " = NULL;")
+
+    def emit_helper_cleanup(self, mark: int, indent: str = "    ") -> None:
+        """释放**循环体内**产生的辅助变量 ✅（with 的管理器等 ✅）。
+
+        for 的迭代器在进入循环**之前**创建 ✅ -> 不在范围内 ✅（不能每轮释放 ✅）。
+        """
+        for name in self.helper_names[mark:]:
+            self.emit(indent + "Py_XDECREF(" + name + ");")
+            self.emit(indent + name + " = NULL;")
+
+    def end_loop_body(self) -> None:
+        """**循环体末尾** ✅：放掉本轮临时变量 ✅（每次迭代都跑 ✅）。"""
+        if not self.loop_stack:
+            return
+        frame = self.loop_stack[-1]
+        self.emit_tmp_cleanup(frame["tmp"], "    ")
+        self.emit_helper_cleanup(frame["helpers"], "    ")
 
     def end_loop(self, broke_var, orelse) -> None:
         """收尾循环 ✅ —— else 分支只在**没有 break** 时执行 ✅（CPython 语义 ✅）。"""
@@ -1151,13 +1183,17 @@ class FunctionGen:
             self.emit("    if (!cratix_truth(" + test + ")) break;")
             for stmt in node.get("body", []):
                 self.emit_stmt(stmt)
+            self.emit("    ")
+            self.end_loop_body()
             self.emit("}")
             self.end_loop(broke_var, node.get("orelse", []))
             return
         if kind == "for":
-            depth_var, broke_var = self.begin_loop()
-            it = self.new_helper()
+            # **迭代器在进入循环前建好** ✅ —— 这样"循环体内"的辅助变量集合是干净的 ✅
+            # （每轮结束要释放体内辅助变量 ✅；迭代器本身不能释放 ✅）
             iter_expr = self.emit_expr(node.kids[1])
+            it = self.new_helper()
+            depth_var, broke_var = self.begin_loop()
             self.emit(it + " = PyObject_GetIter(" + iter_expr + ");")
             self.emit("if (" + it + " == NULL) goto cratix_error;")
             self.emit("while (1) {")
@@ -1170,6 +1206,8 @@ class FunctionGen:
             self.emit_assign(node.kids[0], item)
             for stmt in node.get("body", []):
                 self.emit_stmt(stmt)
+            self.emit("    ")
+            self.end_loop_body()
             self.emit("}")
             self.emit("Py_DECREF(" + it + ");")
             self.emit(it + " = NULL;")
@@ -1181,6 +1219,9 @@ class FunctionGen:
             frame = self.loop_stack[-1]
             self.emit(frame["broke"] + " = 1;")
             self.emit_unwind_to(frame["depth"])
+            # **跳之前也要放** ✅（否则这条路径上的引用会留到函数出口 ✅）
+            self.emit_tmp_cleanup(frame["tmp"])
+            self.emit_helper_cleanup(frame["helpers"])
             self.emit("break;")
             return
         if kind == "continue":
@@ -1188,6 +1229,8 @@ class FunctionGen:
                 raise Unsupported("continue 不在循环里")
             frame = self.loop_stack[-1]
             self.emit_unwind_to(frame["depth"])
+            self.emit_tmp_cleanup(frame["tmp"])
+            self.emit_helper_cleanup(frame["helpers"])
             self.emit("continue;")
             return
         if kind == "pass":
@@ -1779,12 +1822,18 @@ class FunctionGen:
         else:
             self.emit(t + " = PyList_New(0);")
         self.emit("if (" + t + " == NULL) goto cratix_error;")
+        tmp_mark = self.tmp_index
         self.emit_comp_level(gens, 0, t, kind, kids, first_it)
+        # **推导式内部的临时变量用完即放** ✅（否则每次执行泄漏 ✅）
+        self.emit_tmp_cleanup(tmp_mark)
         self.comp_scopes.pop()
 
     def emit_comp_level(self, gens, index, t, kind, kids, iterator: str) -> None:
         """一层生成器 ✅ —— 多生成器就是**嵌套循环** ✅（后面的可以引用前面的目标 ✅）。"""
         target, _iterable, ifs = gens[index]
+        # **本轮迭代的临时变量起点** ✅ —— 元素/条件的临时变量要**每轮释放** ✅
+        # （函数级复用 ✅ -> 不释放就是每轮泄漏一个引用 ✅ 实测 ✅）
+        mark = self.tmp_index
         self.emit("while (1) {")
         item = self.new_tmp()
         self.emit("    " + item + " = PyIter_Next(" + iterator + ");")
@@ -1792,7 +1841,10 @@ class FunctionGen:
         self.emit_assign(target, item)
         for cond in ifs:
             c = self.emit_expr(cond)
-            self.emit("    if (!cratix_truth(" + c + ")) continue;")
+            self.emit("    if (!cratix_truth(" + c + ")) {")
+            self.emit_tmp_cleanup(mark, "        ")
+            self.emit("        continue;")
+            self.emit("    }")
         if index + 1 < len(gens):
             src = self.emit_expr(gens[index + 1][1])
             inner = self.new_helper()
@@ -1811,6 +1863,7 @@ class FunctionGen:
                 self.emit("        if (PySet_Add(" + t + ", " + elt + ") < 0) goto cratix_error;")
             else:
                 self.emit("        if (PyList_Append(" + t + ", " + elt + ") < 0) goto cratix_error;")
+        self.emit_tmp_cleanup(mark, "    ")
         self.emit("}")
         if index == 0:
             self.emit("Py_DECREF(" + iterator + ");")

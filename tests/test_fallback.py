@@ -126,6 +126,21 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["shadowed"], "([[1, 2], [1, 2]], 'outer')")
         self.assertEqual(data["str_join"], "'BB-CCC'")
 
+    def test_08_loop_temporaries_do_not_leak(self):
+        """**每轮都要释放临时变量** ✅ —— 否则长循环里引用线性增长 ✅（实测过 ✅）。"""
+        data = run_worker("leaks")
+        for name in ("loop_refs", "comp_refs", "with_continue", "with_break", "try_refs"):
+            self.assertEqual(
+                data[name + "_delta"], 0,
+                name + " 泄漏了引用：delta=" + str(data[name + "_delta"]),
+            )
+        # 行为不变 ✅
+        self.assertEqual(data["loop_refs_value"], 200)
+        self.assertEqual(data["comp_refs_value"], 50)
+        self.assertEqual(data["with_continue_value"], 50)
+        self.assertEqual(data["with_break_value"], 1)
+        self.assertEqual(data["try_refs_value"], 50)  # 100 轮里偶数 50 个
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
