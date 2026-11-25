@@ -20,6 +20,10 @@ from ..frontend.subset import Unsupported
 # 向量调用的参数槽位上限 ✅（超出走通用路径 ✅ ✅）。
 MAX_VECTORCALL_ARGS = 16
 
+# try/except 的实现上限 ✅（嵌套深度 ✅ / 每层 handler 数 ✅）。
+MAX_TRY_DEPTH = 8
+MAX_TRY_HANDLERS = 4
+
 
 def c_ident(name: str) -> str:
     """Python 名字 -> C 标识符 ✅（加前缀避开 C 关键字 ✅）。"""
@@ -136,6 +140,10 @@ def generate_function(gen: FunctionGen) -> str:
     decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
     decls.append("    PyObject *cratix_mname = NULL;")
+    # **try 栈** ✅（每个函数一份 ✅ —— try/except 的实现状态 ✅ ✅）
+    decls.append("    int cratix_try_n = 0;")
+    decls.append("    int cratix_try_idx[" + str(MAX_TRY_DEPTH) + "];")
+    decls.append("    PyObject *cratix_try_types[" + str(MAX_TRY_DEPTH) + "][" + str(MAX_TRY_HANDLERS) + "];")
     cleanup = []
     # **cratix_kwv 是借用引用** ✅（PyDict_GetItemWithError ✅）—— **不能 DECREF** ✅
     # （多 DECREF 一次 ✅ → 提前释放 ✅ → 后续 use-after-free ✅ → 访问违例 ✅）
@@ -154,6 +162,7 @@ def generate_function(gen: FunctionGen) -> str:
     lines.append("    result = Py_NewRef(Py_None);")
     lines.append("    goto cratix_done;")
     lines.append("cratix_error:")
+    lines.extend(gen.emit_try_handlers())
     lines.append("    result = NULL;")
     lines.append("cratix_done:")
     lines.extend(cleanup)
@@ -175,6 +184,10 @@ def module_body_parts(gen: FunctionGen):
     decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
     decls.append("    PyObject *cratix_mname = NULL;")
+    # **try 栈** ✅（每个函数一份 ✅ —— try/except 的实现状态 ✅ ✅）
+    decls.append("    int cratix_try_n = 0;")
+    decls.append("    int cratix_try_idx[" + str(MAX_TRY_DEPTH) + "];")
+    decls.append("    PyObject *cratix_try_types[" + str(MAX_TRY_DEPTH) + "][" + str(MAX_TRY_HANDLERS) + "];")
     cleanup = []
     for name in gen.helper_names:
         cleanup.append("    Py_XDECREF(" + name + ");")
@@ -552,6 +565,8 @@ class FunctionGen:
         self.tmp_names: list[str] = []
         self.helper_names: list[str] = []
         self.int_helpers: list[str] = []
+        self.declared_attrs: set = set()
+        self.try_blocks: list = []
         self.label_index = 0
 
     # ---------- 基础设施 ----------
@@ -674,6 +689,120 @@ class FunctionGen:
         self.emit(dest + " = " + t + ";")
         self.emit(t + " = NULL;")
 
+    def attr_ref(self, node) -> str:
+        """属性名的**缓存引用** ✅ —— interned 字符串 ✅（避免每次新建 ✅ ✅）。"""
+        return "cratix_an_" + c_ident(target_attr(node))
+
+    def emit_attr_name(self, node) -> None:
+        """惰性初始化 interned 属性名 ✅（函数内 static ✅ ✅ —— 每个函数只声明一次 ✅ ✅）。"""
+        ref = self.attr_ref(node)
+        if ref in self.declared_attrs:
+            return
+        self.declared_attrs.add(ref)
+        self.emit("static PyObject *" + ref + " = NULL;")
+        self.emit("if (" + ref + " == NULL) {")
+        self.emit("    " + ref + " = PyUnicode_InternFromString(" + c_string(target_attr(node)) + ");")
+        self.emit("    if (" + ref + " == NULL) goto cratix_error;")
+        self.emit("}")
+
+    def emit_try(self, node) -> None:
+        """try/except ✅ —— 通过**每函数的 try 栈** + 错误处的 handler 分派 ✅ ✅。
+
+        机制 ✅：
+        - 每个 try 块压栈 ✅（记录它的编号 ✅ 与 handler 类型 ✅）；
+        - 函数体出错 ✅ → 跳到 cratix_error ✅ → 取栈顶 ✅ → 按编号分派 ✅；
+        - handler 体**内联** ✅（这样能看见外层局部变量 ✅ ✅）；
+        - handler 跑完 ✅ → 跳到该 try 的结束标签 ✅ ✅（继续执行 ✅）；
+        - 没有 handler 匹配 ✅ → 弹栈 ✅ → 继续外层 try ✅ ✅ → 都没有 ✅ → 真错误 ✅ ✅。
+        """
+        if node.get("orelse") or node.get("finalbody"):
+            raise Unsupported("try/else/finally（尚未实现）")
+        handlers = node.get("handlers", [])
+        if not handlers:
+            raise Unsupported("没有 handler 的 try")
+        if len(handlers) > MAX_TRY_HANDLERS:
+            raise Unsupported("try 的 handler 过多")
+        try_id = len(self.try_blocks)
+        # **handler 体单独生成** ✅ —— 放在错误处的分派里 ✅（handler 需要看见外层局部变量 ✅ ✅）；
+        # 临时变量 ✅ 此时登记 ✅ → 函数级声明 ✅ ✅ 才会包含它们 ✅ ✅。
+        handler_bodies = []
+        for handler in handlers:
+            saved = self.lines
+            self.lines = []
+            for stmt in handler.kids:
+                self.emit_stmt(stmt)
+            handler_bodies.append(self.lines)
+            self.lines = saved
+        self.try_blocks.append({"handlers": handlers, "bodies": handler_bodies})
+        self.emit("{")
+        self.emit("    int cratix_ti = cratix_try_n++;")
+        self.emit("    cratix_try_idx[cratix_ti] = " + str(try_id) + ";")
+        for j, handler in enumerate(handlers):
+            htype = handler.get("type")
+            if htype is None:
+                self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = PyExc_Exception;")
+            else:
+                hv = self.emit_expr(htype)
+                self.emit("    cratix_try_types[cratix_ti][" + str(j) + "] = " + hv + ";")
+        for stmt in node.get("body", []):
+            self.emit_stmt(stmt)
+        self.emit("    cratix_try_n--;")
+        self.emit("    goto cratix_try_end_" + str(try_id) + ";")
+        self.emit("}")
+        # **结束标签** ✅ —— handler 跑完后跳到这里 ✅（继续执行 ✅ ✅）
+        self.emit("cratix_try_end_" + str(try_id) + ": ;")
+
+    def emit_try_handlers(self) -> list:
+        """错误处的 handler 分派 ✅（switch ✅ —— handler 体需要看见外层局部变量 ✅ ✅）。
+
+        **必须返回行列表** ✅ —— 直接 self.emit ✅ 会追加到 gen.lines ✅，
+        而函数体早已 join ✅ ✅ → 分派代码会**丢失** ✅ ✅（实测 ✅）。
+        """
+        if not self.try_blocks:
+            return []
+        start = len(self.lines)
+        self.emit("    if (cratix_try_n > 0) {")
+        self.emit("        int cratix_ti = cratix_try_n - 1;")
+        self.emit("        PyObject *cratix_et = NULL, *cratix_ev = NULL, *cratix_etb = NULL;")
+        self.emit("        int cratix_m = -1;")
+        self.emit("        PyErr_Fetch(&cratix_et, &cratix_ev, &cratix_etb);")
+        self.emit("        PyErr_NormalizeException(&cratix_et, &cratix_ev, &cratix_etb);")
+        self.emit("        switch (cratix_try_idx[cratix_ti]) {")
+        for try_id, block in enumerate(self.try_blocks):
+            handlers = block["handlers"]
+            self.emit("            case " + str(try_id) + ": {")
+            self.emit("                for (int j = 0; j < " + str(len(handlers)) + "; j++) {")
+            self.emit("                    if (cratix_try_types[cratix_ti][j] != NULL && PyErr_GivenExceptionMatches(cratix_ev, cratix_try_types[cratix_ti][j])) { cratix_m = j; break; }")
+            self.emit("                }")
+            self.emit("                if (cratix_m >= 0) {")
+            for j, handler in enumerate(handlers):
+                name = handler.get("name")
+                if name:
+                    self.emit("                    if (cratix_m == " + str(j) + ") {")
+                    self.emit("                        PyObject *cratix_hv = cratix_ev;")
+                    self.emit("                        Py_INCREF(cratix_hv);")
+                    self.emit("                        " + self.local_var(name) + " = cratix_hv;")
+                    self.emit("                    }")
+            for j, handler in enumerate(handlers):
+                self.emit("                if (cratix_m == " + str(j) + ") {")
+                for line in block["bodies"][j]:
+                    self.emit(line)
+                self.emit("                    goto cratix_try_end_" + str(try_id) + ";")
+                self.emit("                }")
+            self.emit("                }")
+            self.emit("                break;")
+            self.emit("            }")
+        self.emit("        }")
+        self.emit("        if (cratix_m < 0) {")
+        self.emit("            cratix_try_n--;")
+        self.emit("            PyErr_Restore(cratix_et, cratix_ev, cratix_etb);")
+        self.emit("            goto cratix_error;")
+        self.emit("        }")
+        self.emit("        Py_XDECREF(cratix_et);")
+        self.emit("        Py_XDECREF(cratix_etb);")
+        self.emit("    }")
+        return self.lines[start:]
+
     def emit_assign(self, target, value_var: str) -> None:
         """赋值到目标 ✅（value_var 的所有权转移给目标 ✅）。"""
         kind = target.kind
@@ -690,7 +819,8 @@ class FunctionGen:
             return
         if kind == "attr":
             obj = self.emit_expr(target.kids[0])
-            self.emit("if (PyObject_SetAttrString(" + obj + ", " + c_string(target.get("attr")) + ", " + value_var + ") < 0) goto cratix_error;")
+            self.emit_attr_name(target)
+            self.emit("if (PyObject_SetAttr(" + obj + ", " + self.attr_ref(target) + ", " + value_var + ") < 0) goto cratix_error;")
             self.emit("Py_DECREF(" + value_var + ");")
             self.emit(value_var + " = NULL;")
             return
@@ -873,7 +1003,8 @@ class FunctionGen:
                 )
             return
         if kind == "try":
-            raise Unsupported("try/except（C 级异常展开未实现）")
+            self.emit_try(node)
+            return
         if kind == "with":
             raise Unsupported("with（异常路径语义未实现）")
         raise Unsupported("语句：" + kind)
@@ -963,7 +1094,8 @@ class FunctionGen:
             return t
         if kind == "attr":
             obj = self.emit_expr(node.kids[0])
-            self.emit(t + " = PyObject_GetAttrString(" + obj + ", " + c_string(target_attr(node)) + ");")
+            self.emit_attr_name(node)
+            self.emit(t + " = PyObject_GetAttr(" + obj + ", " + self.attr_ref(node) + ");")
             self.emit("if (" + t + " == NULL) goto cratix_error;")
             return t
         if kind == "subscript":

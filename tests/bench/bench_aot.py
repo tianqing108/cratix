@@ -45,7 +45,10 @@ def _load_source(name: str):
 
 
 def _time(fn, args, repeat: int) -> float:
-    """跑 repeat 轮 ✅ —— 取**最快**一轮 ✅（减少噪声 ✅）。"""
+    """跑 repeat 轮 ✅ —— 取**最快**一轮 ✅（减少噪声 ✅）。
+
+    轮数要多 ✅ —— 机器负载波动很大 ✅（实测同一用例 0.20~0.40 ms ✅）✅。
+    """
     best = float("inf")
     for _ in range(repeat):
         start = time.perf_counter()
@@ -64,7 +67,7 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repeat", type=int, default=5, help="每例重复轮数（取最快 ✅）")
+    parser.add_argument("--repeat", type=int, default=9, help="每例重复轮数（取最快 ✅）")
     args = parser.parse_args()
     out_dir = ROOT / "build" / "bench"
     out_dir.mkdir(parents=True, exist_ok=True)

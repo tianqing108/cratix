@@ -7,7 +7,7 @@
 | M0 骨架 + vendor | 仓库结构、vendor 打包半边并去业务化、统一改名、CLI deps/build | 示例工程产出 onefile exe 并运行成功；两次构建 sha256 一致；构建链无第三方编译器 | 1 周 | ✅ 完成 |
 | M1 运行期 + 双形态 | 纯 Python 引导模块(.pyc 兜底)、stub 改造 D1–D8、onedir 目录版 | onefile 零落盘；onedir 可用；verify --no-console 通过 | 1.5 周 | ✅ 完成 |
 | M2 AOT 内核 | IR / 作用域 / 子集判定 / 黄金模型 / C 后端 / MSVC 驱动 / 接入打包链 / 双进程探针 / 函数级回退 | 编译产物与源码行为等价；产物里能加载 AOT 模块 | 4 周 | ✅ 完成 |
-| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类支持完成 ✅**；try-except/with/推导式待做 |
+| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类 ✅ + try/except ✅ 完成**；with/推导式/装饰器待做 |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | ✅ 完成（AOT 增量 ✅ 热构建 3.3s ✅；report.json ✅；可复现 ✅）|
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | 🟡 **基准已建立** ✅（实测 0.69× ✅ 诚实记录 ✅）；提速待做 ✅ |
 | M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | ⬜ 未开始 |
@@ -97,10 +97,17 @@
 - 达到 1.5× 需要**类型特化** ✅（mypyc 级工作量 ✅ ✅）。
 - 详见 [bench-aot.md](bench-aot.md) ✅。
 
+## M3 追加：try/except 支持 ✅
+
+- 机制 ✅：每函数一个 **try 栈** ✅ + 错误处的 **switch 分派** ✅（handler 体内联 ✅ —— 能看见外层局部变量 ✅ ✅）；
+- 支持 ✅：多 handler ✅ / 嵌套 try ✅ / `except X as e` ✅；
+- 不支持 ✅（整函数回退 ✅ ✅）：`try/else/finally` ✅ / `except*` ✅。
+- 实测 ✅：`safe_div(1,0)` → None ✅；`safe_div2("a",1)` → "type" ✅；嵌套 → "inner" ✅。
+
 ## 下一步
 
-1. **提速** ✅：Vectorcall ✅ + 内建直译 ✅（目标把 0.69× 拉到 ≥1.0× ✅）；
-2. **M3 继续** ✅：try-except / with / 推导式 / 装饰器 / property ✅；
+1. **M3 继续** ✅：with ✅ / 推导式 ✅ / 装饰器 ✅ / property ✅；
+2. **提速** ✅：属性槽位化 ✅（mypyc 风格 ✅ —— 收益最大 ✅ ✅）；
 3. **定位原生引导的崩溃** ✅（与 AOT finder 在 memdl 解释器下的交互 ✅）。
 
 详细设计见 [PLAN.md](PLAN.md)。

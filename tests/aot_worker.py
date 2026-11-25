@@ -59,6 +59,30 @@ def op_classes(out_dir: Path) -> dict:
     }
 
 
+def op_try(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_try.py", "cratix_corpus_try", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "div": mod.safe_div(6, 3),
+        "div_zero": mod.safe_div(1, 0),
+        "div2_zero": mod.safe_div2(1, 0),
+        "div2_type": mod.safe_div2("a", 1),
+        "nested": mod.nested(0),
+    }
+
+
+def op_try(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_try.py", "cratix_corpus_try", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "div": mod.safe_div(6, 3),
+        "div_zero": mod.safe_div(1, 0),
+        "div2_zero": mod.safe_div2(1, 0),
+        "div2_type": mod.safe_div2("a", 1),
+        "nested": mod.nested(0),
+    }
+
+
 def op_fallback(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_unsupported.py", "cratix_corpus_unsup", out_dir)
     return {
@@ -87,6 +111,8 @@ def main() -> int:
             data = op_classes(out_dir)
         elif op == "fallback":
             data = op_fallback(out_dir)
+        elif op == "try":
+            data = op_try(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

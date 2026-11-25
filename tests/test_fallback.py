@@ -44,7 +44,16 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["fallback"], ["closure", "gen", "uses_global"])
         self.assertEqual(data["embedded"], ["closure", "gen", "uses_global"])
 
-    def test_02_fallback_functions_work_at_runtime(self):
+    def test_02_try_except_is_supported(self):
+        data = run_worker("try")
+        self.assertIn("safe_div", data["supported"])
+        self.assertEqual(data["div"], 2.0)
+        self.assertIsNone(data["div_zero"])
+        self.assertIsNone(data["div2_zero"])
+        self.assertEqual(data["div2_type"], "type")
+        self.assertEqual(data["nested"], "inner")
+
+    def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
         self.assertEqual(data["uses_global"], 1)
