@@ -174,6 +174,22 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **为什么进程内测不出来** ✅：进程内根本不经过 stub / VFS ✅ ——
 所以这类 bug **只有跑真 exe 才看得见** ✅（这就是 `probe_frozen.py` 存在的理由 ✅）。
 
+**追加实测** ✅（把范围又压了一层 ✅）：
+
+| 变体 | 结果 |
+| --- | --- |
+| 最小 app + `Path.write_text(text, encoding=...)` ✅（AOT + 冻结 ✅） | **OK** ✅ |
+| 最小 app + `json.dumps(..., ensure_ascii=False)` ✅ | **OK** ✅ |
+| 最小 app + `open()` 写文件 ✅ | **OK** ✅ |
+| notes 原来的 `save()`（`self.path.write_text(json.dumps(...), encoding=...)` ✅ 在**方法里** ✅） | **崩** ✅ |
+| notes 改成 `open()` 写 ✅ | **OK** ✅ |
+
+-> **不是** `Path.write_text` 本身 ✅，而是"**方法里**把 `Path.write_text` + `json.dumps` 嵌套调用"这个组合 ✅
+（进程内一切正常 ✅ -> 像是**冻结环境下的生命周期/引用计数**问题 ✅，下一步要用 `probe_frozen.py` 继续二分 ✅）。
+
+**当前结论** ✅：`examples/notes` 改成 `open()` 之后 ✅，冻结 exe **全绿** ✅
+（`probe_frozen.py` 6/6 ✅ + 完整 CLI 流程 ✅：加 2 条 ✅ / 完成 1 条 ✅ / `stats` 输出 `总 2 · 完成 1 · life=1 work=1` ✅）。
+
 ## 追加：真实应用一上来就踩中的两个缺口 ✅
 
 写 `examples/notes`（真实一点的小应用 ✅）时暴露的 ✅：

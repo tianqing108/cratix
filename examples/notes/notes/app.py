@@ -52,7 +52,9 @@ class Store:
 
     def save(self):
         payload = [item.to_dict() for item in self.items]
-        self.path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        text = json.dumps(payload, ensure_ascii=False)
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(text)
 
     def add(self, text, category):
         if category not in CATEGORIES:

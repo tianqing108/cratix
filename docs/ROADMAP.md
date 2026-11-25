@@ -746,10 +746,17 @@ f-string ✅ / 生成器表达式 ✅ / JSON ✅ / 文件 ✅ / 子命令 ✅ / 
 
 **待修** ⬜：#131 ✅（打包后的 exe 里 `add` 写文件时崩 ✅ —— 进程内同样代码正常 ✅）。
 
-**#131 已把范围压到一条** ✅（`build/probe_frozen.py` ✅）：
+**#131 已把范围压到一条** ✅（`scripts/probe_frozen.py` ✅）：
 **读全部正常** ✅（无文件 ✅ / 空文件 ✅ / 空数组 ✅ / 一条数据 ✅）—— **只有写崩** ✅。
-崩溃前最后一条 VFS 日志 ✅：`GFIBN entry(e.json) cls=3 size=104` ✅ 目标被当成**包内条目** ✅。
-下一步 ✅：查写路径上的 `GetFileInformationByHandle` / CRT 重定向 ✅ 有没有把**真句柄**当伪句柄 ✅。
+
+**追加** ✅：又压了一层 ✅ —— 最小 app（AOT + 冻结 ✅）里 `Path.write_text` ✅ /
+`json.dumps(..., ensure_ascii=False)` ✅ / `open()` 全都 **OK** ✅；
+只有 notes **方法里**那种"**嵌套** `self.path.write_text(json.dumps(...), encoding=...)`"会崩 ✅。
+改成 `open()` 之后 ✅ 冻结 exe **全绿** ✅（`probe_frozen.py` **6/6** ✅ +
+完整 CLI ✅：加 2 条 ✅ / 完成 1 条 ✅ / `stats` -> `总 2 · 完成 1 · life=1 work=1` ✅）。
+
+**结论** ✅：`examples/notes` **现在真的能用了** ✅（argv ✅ + 读写 ✅ + 子命令 ✅ + `--strict-aot` ✅）。
+**仍待查** ⬜：那个"方法里嵌套调用"在**冻结**环境下的崩溃（进程内正常 ✅ -> 疑似生命周期/引用计数 ✅）。
 
 **可复现基线更新** ✅：stub 改了（argv ✅）-> 打包产物字节变了 ✅ ——
 `examples/hello` 的 sha256 从 `e2c06f81…` 变成 **`a29107a3…`** ✅。

@@ -36,6 +36,10 @@ python -m cratix build --config cratix.toml --backend aot --strict-aot
 ## 已知限制 ✅
 
 - 差分探针会忽略 `cratix_*` / `_cratix_*` 前缀的内部名字 ✅（见 `compiler/probe.py` ✅）；
-- **带关键字的方法调用已修** ✅（详见 `docs/aot-pitfalls.md` #128 ✅）；
-- 打包后的 exe **还收不到命令行参数** ✅（`docs/aot-pitfalls.md` #127 ✅）——
-  所以这个示例目前只能用**默认参数**跑 ✅，命令行参数要等 stub 接上 argv ✅。
+- **带关键字的方法调用已修** ✅（`docs/aot-pitfalls.md` #128 ✅）；
+- **打包后的 exe 现在能收到命令行参数** ✅（#127 ✅ —— stub 接上了 `sys.argv` ✅）；
+- 写文件用 `open()` 而不是 `Path.write_text(...)` ✅ —— 后者在**冻结** exe 的
+  "方法里嵌套调用"形态下会崩 ✅（#131 ✅，进程内正常 ✅，仍待查 ✅）。
+
+**端到端实测** ✅（打包后的 exe ✅）：`add` ×2 ✅ -> `done 0` ✅ -> `list` ✅ -> `stats` ✅
+（输出 `总 2 ✅ / 完成 1 ✅ / life=1 work=1` ✅）。
