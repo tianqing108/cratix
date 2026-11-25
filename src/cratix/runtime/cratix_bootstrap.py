@@ -179,7 +179,8 @@ def cratix_boot():
     _ensure_std_streams()
     _apply_compat(meta)
 
-    if _TABLE:
+    # **诊断开关** ✅：CRATIX_NO_FINDER=1 ✅ -> 不装 AOT finder ✅（模块回退 .pyc ✅）
+    if _TABLE and not os.environ.get("CRATIX_NO_FINDER"):
         _install_aot_finder(_TABLE)
 
     # 冻结形态：工作目录锚定到 exe 目录（相对路径的数据文件因此落在 exe 旁边）
