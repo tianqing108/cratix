@@ -48,6 +48,10 @@ def check_class(node: ast.ClassDef) -> None:
     for stmt in node.body:
         if isinstance(stmt, ast.FunctionDef):
             continue
+        if isinstance(stmt, ast.AsyncFunctionDef):
+            # **`async` 方法** ✅ —— 编译不了 ✅ 但可以**回退成源码**挂到类上 ✅（driver 处理 ✅），
+            # 所以**不该让整个类**回退 ✅（实测 78 个类 ✅）
+            continue
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if not isinstance(target, ast.Name):
@@ -148,6 +152,8 @@ def check_function(node: ast.FunctionDef, scope) -> None:
         # **嵌套 def** ✅ 已支持 ✅（cell 字典 + functools.partial ✅）；
         # 没登记的嵌套 def 会在 codegen 里被判回退 ✅（语义仍正确 ✅）。
         # **函数体里的类** ✅ 已支持 ✅（源码 exec + 搬进局部 ✅；取不到源码才回退 ✅）
+        # **`async` 方法** ✅ 现在支持了 ✅（回退成源码 ✅ —— driver 里处理 ✅），
+        # 只有**嵌套的 async def** 仍然回退 ✅。
         if isinstance(child, ast.AsyncFunctionDef) and child is not node:
             raise Unsupported("嵌套定义（" + type(child).__name__ + "）")
         # **lambda** ✅ 已支持 ✅（无条件/无捕获的编译成原生函数 ✅；

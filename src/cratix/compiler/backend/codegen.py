@@ -1073,6 +1073,26 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            Py_DECREF(cratix_d);")
             out.append("        }")
             desc_index += 1
+        # **只有注解的类体条目** ✅（`x: int` ✅）—— 建一个临时命名空间 exec 它们 ✅，
+        # 把这个命名空间的 `__annotations__` 挂到类上 ✅（与源码执行语义一致 ✅）。
+        ann_sources = cls.get("ann_only") or []
+        if ann_sources:
+            # **放进一个临时类体里 exec** ✅ —— 模块级的 `x: int` 会把注解写进
+            # **模块的** `__annotations__` ✅（不是 locals ✅）-> 必须借一个类体 ✅
+            ann_src = "class _CratixAnnTmp:" + chr(10) + chr(10).join("    " + line for line in ann_sources) + chr(10)
+            out.append("        {")
+            out.append("            PyObject *cratix_ann_ns = PyDict_New();")
+            out.append("            if (cratix_ann_ns == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            PyObject *cratix_ann_res = PyRun_String(" + c_string(ann_src) + ", Py_file_input, cratix_globals, cratix_ann_ns);")
+            out.append("            if (cratix_ann_res == NULL) { Py_DECREF(cratix_ann_ns); Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_ann_res);")
+            out.append("            PyObject *cratix_ann_cls = PyDict_GetItemString(cratix_ann_ns, \"_CratixAnnTmp\");")
+            out.append("            PyObject *cratix_anns = cratix_ann_cls ? PyObject_GetAttrString(cratix_ann_cls, \"__annotations__\") : NULL;")
+            out.append("            Py_XDECREF(cratix_anns);")
+            out.append("            cratix_anns = cratix_ann_cls ? PyObject_GetAttrString(cratix_ann_cls, \"__annotations__\") : NULL;")
+            out.append("            if (cratix_anns != NULL && PyObject_SetAttrString(cls, \"__annotations__\", cratix_anns) < 0) { Py_DECREF(cratix_ann_ns); Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_ann_ns);")
+            out.append("        }")
         # **类体里的类** ✅ —— 源码 exec 到模块字典 ✅，再挂到外层类上 ✅，最后把模块字典里的临时名删掉 ✅
         for inner_name, _order, inner_source in (cls.get("inner_classes") or []):
             out.append("        {")

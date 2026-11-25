@@ -1020,6 +1020,8 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             "bases": [builder.build_expr(base) for base in stmt.bases],
             "doc": _doc_of(stmt),
             "descriptor_methods": [],
+            # **只有注解的类体条目** ✅（`x: int` ✅ —— 只进 `__annotations__` ✅）
+            "ann_only": [],
             # **类体里的类** ✅（(名字, 顺序, 源码) ✅）
             "inner_classes": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）
@@ -1108,6 +1110,12 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     key_names.append(pname)
                 key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
+            elif isinstance(item, ast.AsyncFunctionDef):
+                # **async 方法** ✅ 仍然让**整个类**回退 ✅ —— 试过"只回退这个方法" ✅，
+                # 但类工厂/建类路径**不会把回退方法挂到类上** ✅ -> 方法直接消失 ✅（比整类回退更糟 ✅）。
+                # 要单独回退方法 ✅，得先把"回退方法挂类"这条路径做出来 ✅（TODO ✅）。
+                class_broken = "类体语句：AsyncFunctionDef"
+                break
             elif isinstance(item, ast.ClassDef):
                 # **类体里的类** ✅ —— 用**源码 exec** ✅（在 maker 里建完之后挂到外层类上 ✅）
                 inner_source = _source_segment(source, item, dedent=True)
@@ -1117,9 +1125,16 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             elif isinstance(item, (ast.Assign, ast.AnnAssign)):
                 # **类属性** ✅（含带注解的 `x: int = 0` ✅ —— 真实代码里到处是 ✅）
                 if isinstance(item, ast.AnnAssign):
-                    if not isinstance(item.target, ast.Name) or item.value is None:
-                        class_broken = "类体语句：AnnAssign（无值或非简单名字）"
+                    if not isinstance(item.target, ast.Name):
+                        class_broken = "类体语句：AnnAssign（目标不是简单名字）"
                         break
+                    if item.value is None:
+                        # **只有注解、没有值** ✅（`x: int` ✅）—— 它**不建属性** ✅，
+                        # 只往 `__annotations__` 里加一条 ✅。记下源码 ✅，建类时统一 exec 一次 ✅。
+                        segment = _source_segment(source, item, dedent=True)
+                        if segment:
+                            class_info["ann_only"].append(segment)
+                        continue
                     class_info["attrs"].append((item.target.id, builder.build_expr(item.value)))
                 else:
                     target = item.targets[0]
