@@ -279,17 +279,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("static PyMethodDef cratix_cls_" + c_ident(cls["name"]) + "_methods[] = {")
         for method_name, _gen in cls.get("methods", []):
             cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(cls["name"] + "." + method_name)
-            # **私有名** ✅ —— 原生方法放在模块字典的私有名下 ✅
-            out.append("    {" + q + "_cratix_" + method_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
+            # **私有名带类名** ✅ —— 不同类的同名方法（如 __init__ ✅）不会冲突 ✅
+            private = "_cratix_" + cls["name"] + "_" + method_name
+            out.append("    {" + q + private + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
         out.append("    {NULL, NULL, 0, NULL}")
         out.append("};")
         out.append("")
         # **跳板源码** ✅：把 self 传给原生方法 ✅（普通 PyCFunction ✅ 不绑定 self ✅）
         for method_name, _gen in cls.get("methods", []):
-            tb_name = "_cratix_tb_" + method_name
+            tb_name = "_cratix_tb_" + cls["name"] + "_" + method_name
+            private = "_cratix_" + cls["name"] + "_" + method_name
             src = (
                 "def " + tb_name + "(self, *args, **kwargs):" + chr(10)
-                + "    return _cratix_" + method_name + "(self, *args, **kwargs)" + chr(10)
+                + "    return " + private + "(self, *args, **kwargs)" + chr(10)
             )
             out.append("static const char *cratix_tb_" + c_ident(cls["name"] + "." + method_name) + " = " + c_string(src) + ";")
         out.append("")
@@ -358,46 +360,56 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("        {")
             out.append("            PyObject *fn = PyCFunction_NewEx(&" + table + "[" + str(idx) + "], NULL, NULL);")
             out.append("            if (fn == NULL) { Py_DECREF(m); return NULL; }")
-            out.append("            if (PyDict_SetItemString(cratix_globals, " + q + "_cratix_" + method_name + q + ", fn) < 0) { Py_DECREF(fn); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyDict_SetItemString(cratix_globals, " + q + "_cratix_" + cls["name"] + "_" + method_name + q + ", fn) < 0) { Py_DECREF(fn); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(fn);")
             out.append("        }")
         for method_name, _gen in cls.get("methods", []):
-            tb = "_cratix_tb_" + method_name
+            tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             out.append("        {")
             out.append("            PyObject *t = PyRun_String(cratix_tb_" + c_ident(cls["name"] + "." + method_name) + ", Py_file_input, cratix_globals, cratix_globals);")
             out.append("            if (t == NULL) { Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(t);")
             out.append("        }")
-        # **建类** ✅（3.14 的 PyType_Spec **没有 dict 成员** ✅ —— 只能建完再挂 ✅）
-        out.append("        PyType_Spec spec = cratix_cls_" + c_ident(cls["name"]) + "_spec;")
-        out.append("        PyObject *cls = PyType_FromSpec(&spec);")
-        out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+        # **建类** ✅ —— 用 `type(name, (object,), ns)` ✅（比 PyType_FromSpec 稳 ✅ ✅）
+        # 命名空间里有 **__module__** ✅ 与**跳板** ✅（普通 Python 函数 ✅ → 调用时绑定 self ✅ ✅）。
+        out.append("        PyObject *ns = PyDict_New();")
+        out.append("        if (ns == NULL) { Py_DECREF(m); return NULL; }")
         out.append("        PyObject *mod_name = PyUnicode_FromString(" + q + module_name + q + ");")
-        out.append("        if (mod_name == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
-        out.append("        PyObject_SetAttrString(cls, \"__module__\", mod_name);")
+        out.append("        if (mod_name == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+        out.append("        PyDict_SetItemString(ns, \"__module__\", mod_name);")
         out.append("        Py_DECREF(mod_name);")
-        # **挂方法** ✅（跳板 ✅ —— 普通函数放在类字典里 ✅ → 调用时自动绑定 self ✅）
+        # **跳板进命名空间** ✅（普通 Python 函数 ✅ → 作为方法时自动绑定 self ✅ ✅）
         for method_name, _gen in cls.get("methods", []):
-            tb = "_cratix_tb_" + method_name
+            tb = "_cratix_tb_" + cls["name"] + "_" + method_name
             out.append("        {")
             out.append("            PyObject *tbv = PyDict_GetItemString(cratix_globals, " + q + tb + q + ");")
-            out.append("            if (tbv == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (tbv == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
             out.append("            Py_INCREF(tbv);")
             out.append("            PyObject *mn = PyUnicode_FromString(" + q + method_name + q + ");")
-            out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
             out.append("            PyObject_SetAttrString(tbv, \"__name__\", mn);")
             out.append("            Py_DECREF(mn);")
-            out.append("            if (PyObject_SetAttrString(cls, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyDict_SetItemString(ns, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
             out.append("            Py_DECREF(tbv);")
             out.append("        }")
         # **类属性** ✅
         for attr_name, attr_ir in cls.get("attrs", []):
             out.append("        {")
             out.append("            PyObject *av = " + const_expr(attr_ir.get("value")) + ";")
-            out.append("            if (av == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
-            out.append("            if (PyObject_SetAttrString(cls, " + q + attr_name + q + ", av) < 0) { Py_DECREF(av); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (av == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            PyDict_SetItemString(ns, " + q + attr_name + q + ", av);")
             out.append("            Py_DECREF(av);")
             out.append("        }")
+        # **建类** ✅
+        out.append("        PyObject *bases = PyTuple_Pack(1, (PyObject *)&PyBaseObject_Type);")
+        out.append("        if (bases == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+        out.append("        PyObject *cname = PyUnicode_FromString(" + q + cls["name"] + q + ");")
+        out.append("        if (cname == NULL) { Py_DECREF(bases); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+        out.append("        PyObject *cls = PyObject_CallFunctionObjArgs((PyObject *)&PyType_Type, cname, bases, ns, NULL);")
+        out.append("        Py_DECREF(cname);")
+        out.append("        Py_DECREF(bases);")
+        out.append("        Py_DECREF(ns);")
+        out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
         out.append("        if (PyDict_SetItemString(cratix_globals, " + q + cls["name"] + q + ", cls) < 0) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
         out.append("        Py_DECREF(cls);")
         out.append("    }")

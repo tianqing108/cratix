@@ -2536,11 +2536,12 @@ int main(void) {
             vpath[i] = 0;
             strcat(vpath, "/runtime/cratix_bootstrap.pyd");
             sprintf(code,
-                    "import importlib.util, sys\n"
+                    "import importlib.util, sys, cratix_loader\n"
                     "_p = \"%s\"\n"
                     "_spec = importlib.util.spec_from_file_location('cratix_bootstrap', _p)\n"
-                    "_mod = importlib.util.module_from_spec(_spec)\n"
-                    "_spec.loader.exec_module(_mod)\n"
+                    /* **走我们的加载桥** ✅ —— 标准加载器要求单阶段模块带 m_def ✅
+                     * （cratix 自研 AOT 模块没有 m_def ✅ -> 标准加载器拒绝 ✅）✅ */
+                    "_mod = cratix_loader.load('runtime/cratix_bootstrap.pyd', 'PyInit_cratix_bootstrap', _spec)\n"
                     "sys.modules['cratix_bootstrap'] = _mod\n"
                     "_mod.cratix_boot()\n",
                     vpath);

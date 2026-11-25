@@ -75,10 +75,17 @@
 - 类属性 ✅ / 实例属性 ✅ / `isinstance` ✅ 均可用 ✅；
 - **33 项测试全绿** ✅（25 单元 + 8 端到端 ✅）。
 
+## 引导模块原生化（dogfooding ✅）
+
+- `cratix_bootstrap.py` ✅ 被**自研编译器**编译成 `runtime/cratix_bootstrap.pyd` ✅（11 个函数 ✅）；
+- stub 用**加载桥**装载它 ✅（`cratix_loader.load` ✅ —— 标准加载器要求单阶段模块带 m_def ✅）；
+- **当前默认走 .pyc 引导** ✅（`CRATIX_BOOTSTRAP=native` 可开原生 ✅）——
+  原生引导在 **memdl 映射的解释器**里崩溃 ✅（0xC0000005 ✅），已隔离 ✅（见 aot-pitfalls ✅ #24 ✅）。
+
 ## 下一步
 
-1. **M3 继续** ✅：try-except / with / 推导式 / 装饰器 / property ✅；
-2. **引导模块原生化** ✅：自研编译器产出 `runtime/cratix_bootstrap.pyd` ✅（类支持已就绪 ✅）；
+1. **定位原生引导的崩溃** ✅（怀疑与 memdl 下的堆/引用计数交互 ✅）；
+2. **M3 继续** ✅：try-except / with / 推导式 / 装饰器 / property ✅；
 3. **增量编译** ✅：按模块指纹复用 .pyd ✅（M4 ✅）。
 
 详细设计见 [PLAN.md](PLAN.md)。

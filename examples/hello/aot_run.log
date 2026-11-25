@@ -1,0 +1,89 @@
+[+0ms] [stub] host TLS index = 0 (pool=000002A3767BB740 size=65536)
+[+0ms] [stub] exe = C:\project\cratix\examples\hello\build\public\hello_0.1.0.exe
+[+0ms] [stub] payload off=396800 size=15146594
+[+16ms] [stub] payload crc ok (0xA0847A53)
+[+16ms] [stub] zip entries = 601
+[+16ms] [stub] inflate ready (memdl zlib1.dll)
+[+16ms] [stub] CRT file IO hooked ✅
+[+16ms] [stub] interpreter entry = native/python314.dll
+[+47ms] [stub] extracted 6785760 bytes
+[+47ms] [stub] A 形态：解释器内存映射 ✅ 不落盘 ✅
+[+47ms] [stub] loading interpreter (mode=mem)...
+[+47ms] [stub] loader hook: ok ✅
+[+63ms] [stub] map returned 000002A3767B6380
+[+63ms] [stub] python314.dll mapped at 000002A3767B6380 (6785760 bytes)
+[+63ms] [stub] interp TLS index=2 slots=000002A3767BB6D0
+[+63ms] [stub] interp TLS block=000002A3768104E0:[+63ms]  00000000000000000000000000000000000000000000000000000000000000000099d6a8f67f0000[+63ms] 
+[+63ms] [stub] note: interpreter does not import ntdll!__tls_get_addr
+[+63ms] [stub] IAT redirected: LoadLibraryExW/LoadLibraryW/GetProcAddress
+[+63ms] [stub] CRT _wstat64i32 redirect: ok ✅
+[+63ms] [stub] VFS hooked: python314.dll ✅
+[+63ms] [stub] _dup redirect: ok ✅
+[+63ms] [stub] api: init=00007FF6A8AB9B90 isinit=00007FF6A8AB9C64 finalize=00007FF6A8AB9B7C run=00007FF6A8AC2BFC errprint=00007FF6A8AC2780
+[+63ms] [stub] Py_GetVersion = 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]
+[+63ms] [stub] api owner: base=00007FF6A87B0000 init_off=3185552 owner=python314.dll
+[+63ms] [stub] ⚠ API 指针来自别的模块 ✅（双解释器 ✅）
+[+63ms] [stub] calling Py_InitializeEx...
+[+110ms] [stub] Python initialized
+[+110ms] [stub] loader apis: CFunc=00007FF6A8A5C364 AddModule=00007FF6A8A8E93C SetAttr=00007FF6A8903DE8 BuildValue=00007FF6A87D64E0
+[+110ms] [stub] cratix_loader 已就绪
+[+235ms] [stub] bootstrap ok（模块解析 finder 已装载）
+[+235ms] [stub] entry = hello.app:main
+[+235ms] [veh] flags_after=0x246 tf=0 asm_calls=770866
+[+235ms] [veh] saved_flags=0x246 tf=0
+[+235ms] [diag] lookup pc=00007FF6A88422D2 -> res=00007FF6A8E247A8 imageBase=00007FF6A87B0000 begin=0x1 end=0x0 unwind=0x0
+[+235ms] [diag] GetModuleHandleEx(00007FF6A87B1000) -> FAILED err=126
+[+235ms] [veh] eflags=10206 tf=0
+[+235ms] [diag] tid=18908 main_tid=18908 rsp=000000E91AEFDAF0 sbase=000000E91AF00000 slim=000000E91AEF1000 depth=9488
+[+235ms] [diag] interp hits=47
+[+235ms] [diag]   rva=0x6e7d30 count=18
+[+235ms] [diag]   rva=0x5c2b40 count=6
+[+235ms] [diag]   rva=0x6b0f48 count=6
+[+235ms] [diag]   rva=0x6a6360 count=3
+[+235ms] [diag]   rva=0x5c2b41 count=3
+[+235ms] [diag]   rva=0x6a6d90 count=2
+[+235ms] [diag]   rva=0x5b9280 count=2
+[+235ms] [diag]   rva=0x35b9b2 count=2
+[+235ms] [diag]   rva=0x41adf count=2
+[+235ms] [diag]   rva=0x3fc10 count=2
+[+235ms] [diag]   rva=0x40030 count=1
+[+235ms] [diag]   rva=0x2e051 count=1
+[+235ms] [diag]   sp+000: 0000000000000000
+[+235ms] [diag]   sp+008: 000002a378483c01
+[+235ms] [diag]   sp+016: 000002a3788985f0
+[+235ms] [diag]   sp+024: e385c62e82b4ce2c
+[+235ms] [diag]   sp+032: 000002a3787aa850
+[+235ms] [diag]   sp+040: 00007ff6a8ef4201
+[+235ms] [diag]   sp+048: 000002a37881ebc0
+[+235ms] [diag]   sp+056: 000002a3787ae0c0
+[+235ms] [diag]   sp+064: e385c62e82b4ce2c
+[+235ms] [diag]   sp+072: 00007ff6a8e97d30 <interp+0x6e7d30>
+[+235ms] [diag]   sp+080: 0000000000000000
+[+235ms] [diag]   sp+088: 0000000000000000
+[+235ms] [diag]   sp+096: 0000000000000000
+[+235ms] [diag]   sp+104: 0000000000000000
+[+235ms] [diag]   sp+112: 0000000000000000
+[+235ms] [diag]   sp+120: 0000000000000000
+[+235ms] [diag]   sp+128: 0000000000000000
+[+235ms] [diag]   sp+136: 0000000000000000
+[+235ms] [diag]   sp+144: 0000000000000000
+[+235ms] [diag]   sp+152: 0000000000000000
+[+235ms] [diag]   sp+160: 0000000000000000
+[+235ms] [diag]   sp+168: 0000000000000000
+[+235ms] [diag]   sp+176: 0000000000000000
+[+235ms] [diag]   sp+184: 0000000000000000
+[+235ms] [veh] rip=00007FF6A88422D2 rsp=000000E91AEFDAF0 rbp=000002A3788985F0 rax=0000000000000000 rbx=000002A37881EBC0 rcx=0000000000000000 rdx=00007FF6A8EFB650 r8=0000000000000006 r9=E385C62E82B4CE2C r12=000002A37840BD30 r13=0000000000000000 r10=000000000000003F r11=0000000000000008 r14=000002A378498700 r15=0000000000000000
+[+235ms] [veh] ret=0000000000000000 owner=(unknown) fault=0000000000000008
+[+235ms] [veh] tls table=000002A37680F2C0 block2=000002A3768104E0
+[+235ms] [veh] tbl=000002A37680F2C0 t0=0000000000000000 t1=000002A37680F4D0 t2=000002A3768104E0 t3=0000000000000000
+[+235ms] [veh] asm_calls=770866 asm_ret=0000000000000000 retaddr=0000000000000000
+[+235ms] [veh] tls margin:[+235ms]  ................................................................[+235ms] 
+[+235ms] [veh] interp TLS index=2 code@18c2d1=E8 05 E9 E6 EF 90 90 90 90
+[+235ms] [veh] tid=18908 (stack limits unavailable)
+[+235ms] [veh] stack (5 frames):
+[+235ms] [veh]   #0 00007FF69879749C C:\project\cratix\examples\hello\.\build\public\hello_0.1.0.exe
+[+235ms] [veh]   #1 00007FFD15916DF6 C:\WINDOWS\SYSTEM32\ntdll.dll
+[+235ms] [veh]   #2 00007FFD15916595 C:\WINDOWS\SYSTEM32\ntdll.dll
+[+235ms] [veh]   #3 00007FFD159BA47E C:\WINDOWS\SYSTEM32\ntdll.dll
+[+235ms] [veh]   #4 00007FF6A88422D2 python314.dll+
+[veh] code=0xC0000005 addr=00007FF6A88422D2 rva=0x922d2 in_module=1 mod=python314.dll

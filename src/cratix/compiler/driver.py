@@ -290,13 +290,16 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
     stem = module_compile.init_symbol[len("PyInit_"):]
     c_path = out_dir / (stem + ".c")
     if alias_init:
+        # **必须带上 fallback_code 与 classes** ✅ —— 漏传 ✅ 会丢掉类与回退函数 ✅
         module_compile.c_source = codegen.generate_module_single_phase(
             module_compile.module_name,
             module_compile.init_symbol,
             module_compile.functions,
             module_compile.key_names,
             module_compile.module_gen,
-            alias_init,
+            alias_init=alias_init,
+            fallback_code=module_compile.fallback_code,
+            classes=module_compile.classes,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")
