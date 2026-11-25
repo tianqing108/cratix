@@ -153,6 +153,21 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **追加发现** ✅：工厂路径里 `Py_DECREF(args)` 之后**忘了置 NULL** ✅ ->
 函数出口的清理**又 DECREF 一次** ✅ -> 双重释放 ✅（已修 ✅，但**不是**析构崩溃的唯一原因 ✅）。
 
+## 追加：#136 **语句组合差分**（两个"硬失败"被改成明确回退 ✅）
+
+第三个差分语料 `tests/corpus/corpus_statements.py` ✅：
+`for/else` ✅ `while/else` ✅ 嵌套 `try` ✅ `finally` ✅ 链式调用 ✅ `assert` ✅
+`global` ✅ 继承 + `super()` ✅ `classmethod` ✅ `staticmethod` ✅ `__eq__` ✅。
+
+| # | 现象 | 根因 | 处理 |
+| --- | --- | --- | --- |
+| 136 | `try/finally` 里的 `continue` -> **非法 C**（`continue` 在 loop 外 ✅ / `cratix_ldepth_*` 未声明 ✅）-> **整模块编译失败** ✅ | finally 的收尾代码是**函数级**生成的 ✅，`continue` 不能直接写在那儿 ✅ | **明确回退** ✅（`try/finally 里的 break/continue` ✅）—— 语义正确 ✅、不再拖垮模块 ✅ |
+| 137 | `with A() as a, B() as b:` **段错误** ✅ | 第二个管理器的**帧记录**有问题 ✅（待查 ✅） | **明确回退** ✅（`with 多个上下文管理器` ✅）—— 同样先保正确 ✅ |
+
+**教训** ✅：差分语料的价值就在这 ✅ —— 它专挑"**从没被写过**"的语法组合 ✅，
+而这类组合一旦不支持 ✅ 后果往往是**整模块编译失败**或**段错误** ✅，不是"慢一点" ✅。
+两个都已从"硬失败"降级为"**明确回退 + 原因写进 report ✅**" ✅。
+
 ## 追加：#135 **形态差分测试**（抓到 `isinstance` 段错误 ✅）
 
 顺着"有限清单排一遍"的思路 ✅，又加了 `tests/corpus/corpus_forms.py` ✅：

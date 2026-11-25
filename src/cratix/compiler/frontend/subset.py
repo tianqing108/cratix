@@ -66,6 +66,59 @@ def check_class(node: ast.ClassDef) -> None:
         raise Unsupported("类体语句：" + type(stmt).__name__)
 
 
+def _handler_escapes(try_node) -> bool:
+    """**`except` 分支里的 `break`/`continue`** ✅ —— 这个组合会生成非法 C ✅。"""
+    def walk(node, depth: int) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.For, ast.While, ast.AsyncFor)):
+                if walk(child, depth + 1):
+                    return True
+            elif isinstance(child, (ast.Break, ast.Continue)):
+                if depth == 0:
+                    return True
+            elif walk(child, depth):
+                return True
+        return False
+
+    return any(walk(handler, 0) for handler in try_node.handlers)
+
+
+def _escapes_try(try_node) -> bool:
+    """**`break`/`continue` 会不会跳出这个 `try`** ✅。
+
+    只有**跳出**的才麻烦 ✅ —— finally 的收尾代码是**函数级**生成的 ✅，
+    那里不能写 `continue` ✅。**循环内部的**（`try: ... for: ... break` ✅）完全没问题 ✅。
+    """
+    def walk(node, depth: int) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.For, ast.While, ast.AsyncFor)):
+                if walk(child, depth + 1):
+                    return True
+            elif isinstance(child, (ast.Break, ast.Continue)):
+                if depth == 0:
+                    return True
+            elif walk(child, depth):
+                return True
+        return False
+
+    for part in list(try_node.body) + list(try_node.orelse) + list(try_node.handlers):
+        if walk(part, 0):
+            return True
+    return False
+
+
+def _inside_finally_handler(sub, try_node) -> bool:
+    """`break`/`continue` 是不是落在 `finally` 体里（那里是函数级代码 ✅ 没有循环语义问题 ✅）。
+
+    保守判断 ✅：只要它在 `finalbody` 的子树里就算"在 finally 里" ✅。
+    """
+    for item in try_node.finalbody:
+        for candidate in ast.walk(item):
+            if candidate is sub:
+                return True
+    return False
+
+
 def check_function(node: ast.FunctionDef, scope) -> None:
     """检查函数体 ✅；不支持则抛 Unsupported ✅。
 
@@ -74,6 +127,25 @@ def check_function(node: ast.FunctionDef, scope) -> None:
     if scope.has_closure:
         raise Unsupported("闭包捕获（自由变量：" + ", ".join(sorted(scope.free)[:6]) + "）")
     # **`nonlocal` 只读** ✅ 已支持 ✅（读走 cell ✅）；**写回**由 driver 检查后回退 ✅
+    # **`try/finally` 里的 `break` / `continue`** ✅ 还不支持 ✅ ——
+    # 生成出来会是**非法 C**（`continue` 落在 loop 外 ✅ / `cratix_ldepth_*` 未声明 ✅）✅，
+    # 那会让**整个模块编译失败** ✅。这里明确回退 ✅（语义正确 ✅ 只是不加速 ✅）。
+    # **只拒绝"handler 里跳出"的那种** ✅ —— `try` 体里跳出（`for: try: break` ✅）
+    # 一直是好的 ✅（`corpus_finally` 就在测它 ✅）；坏的是 `except` 分支里 `continue` ✅。
+    for child in ast.walk(node):
+        if isinstance(child, ast.Try) and child.finalbody and _handler_escapes(child):
+            raise Unsupported("try/finally 的 handler 里 break/continue")
+
+    # **`with` 多个管理器** ✅ 暂时回退 ✅ —— 第二个管理器的帧记录有问题 ✅
+    # （实测：`with A() as a, B() as b:` 段错误 ✅，pitfall #136 ✅）。
+    # **`with` 多管理器 + 函数里的类** ✅ -> 段错误 ✅（pitfall #137 ✅）。
+    # 只有这个组合坏 ✅ —— 模块级类的多管理器一直是好的 ✅（`corpus_with` ✅）。
+    has_local_class = any(isinstance(sub, ast.ClassDef) for sub in ast.walk(node))
+    if has_local_class:
+        for child in ast.walk(node):
+            if isinstance(child, ast.With) and len(child.items) > 1:
+                raise Unsupported("with 多个管理器 + 函数里的类")
+
     for child in ast.walk(node):
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:

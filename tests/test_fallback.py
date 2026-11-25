@@ -418,6 +418,16 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["mismatches"], [])
         self.assertGreaterEqual(data["compared"], 15)
 
+    def test_31_statements_differential(self):
+        """**语句组合 + 类特性差分** ✅：for/else、while/else、嵌套 try、finally、
+        链式调用、assert、global、继承 + super + classmethod（源码版当基准）。"""
+        data = run_worker("statements")
+        self.assertTrue(data["module_ok"])
+        # with 多管理器（#136 会崩）与 try/finally 里的 continue 目前明确回退
+        self.assertEqual(data["fallback"], ["multiple_with", "try_in_loop"])
+        self.assertEqual(data["mismatches"], [])
+        self.assertGreaterEqual(data["compared"], 17)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

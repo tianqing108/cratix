@@ -143,6 +143,57 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_statements(out_dir: Path) -> dict:
+    """**语句组合 + 类特性差分** ✅。"""
+    import importlib.util
+
+    mc, mod = _compile("corpus_statements.py", "cratix_corpus_statements", out_dir)
+    corpus = Path(__file__).resolve().parent / "corpus" / "corpus_statements.py"
+    spec = importlib.util.spec_from_file_location("cratix_src_statements", corpus)
+    source = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(source)
+
+    cases = [
+        ("for_else", ([1, 2],)),
+        ("for_else", ([1, 9],)),
+        ("while_else", ([1, 2],)),
+        ("while_else", ([1, -1],)),
+        ("nested_try", ([1],)),
+        ("nested_try", ([2],)),
+        ("try_in_loop", ([1, -1, 2],)),
+        ("finally_overrides", ([],)),
+        ("multiple_with", ([], [])),
+        ("chained_calls", ("Hello World Again",)),
+        ("assert_ok", ([1, 2, 3],)),
+        ("global_write", (5,)),
+        ("global_write", (2,)),
+        ("class_features", ()),
+        ("dict_of_lists", (["a", "b", "a"], [1, 2, 3])),
+        ("nested_mutation", ()),
+        ("truthiness", ([0, 1, "", "x", [], [1]],)),
+    ]
+
+    mismatches = []
+    for name, args in cases:
+        try:
+            expected = repr(getattr(source, name)(*args))
+        except Exception as exc:  # noqa: BLE001
+            expected = "EXC:" + type(exc).__name__ + ":" + str(exc)
+        try:
+            actual = repr(getattr(mod, name)(*args))
+        except Exception as exc:  # noqa: BLE001
+            actual = "EXC:" + type(exc).__name__ + ":" + str(exc)
+        if actual != expected:
+            mismatches.append(f"{name}{args}: aot={actual} src={expected}")
+
+    return {
+        "module_ok": mc.module_ok,
+        "fallback": sorted(mc.fallback_names),
+        "compared": len(cases),
+        "mismatches": mismatches,
+    }
+
+
 def op_forms(out_dir: Path) -> dict:
     """**常见形态差分** ✅ —— 源码版当基准 ✅ 逐项比 ✅。"""
     import importlib.util
@@ -680,6 +731,8 @@ def main() -> int:
             data = op_operators(out_dir)
         elif op == "forms":
             data = op_forms(out_dir)
+        elif op == "statements":
+            data = op_statements(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001
