@@ -147,6 +147,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["call_refs_value"], 0)
         self.assertEqual(data["call_fn_refs_value"], 100)  # take_two 每次都返回 1
 
+    def test_09_metadata_is_faithful(self):
+        """**元数据保真** ✅：docstring / 签名 / qualname / module 与源码逐字段一致 ✅。"""
+        data = run_worker("metadata")
+        if data["mismatches"]:
+            detail = chr(10).join(
+                str(item["key"]) + ": src=" + str(item["src"]) + " aot=" + str(item["aot"])
+                for item in data["mismatches"]
+            )
+            self.fail("元数据与源码不一致：" + chr(10) + detail)
+        self.assertGreaterEqual(data["fields"], 8)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

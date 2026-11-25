@@ -143,6 +143,66 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_metadata(out_dir: Path) -> dict:
+    """**元数据保真** ✅ —— 源码与 AOT 逐字段比对 ✅。"""
+    import importlib.util
+    import inspect
+
+    name = "cratix_meta_cmp"
+    corpus = CORPUS / "corpus_metadata.py"
+    spec = importlib.util.spec_from_file_location(name, corpus)
+    src_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(src_mod)
+
+    mc = driver.compile_module(corpus, name)
+    pyd = driver.build_pyd(mc, out_dir)
+    aot_mod = loader.load_compiled_module(pyd, mc.init_symbol)
+
+    def signature(fn):
+        try:
+            return str(inspect.signature(fn))
+        except Exception as exc:  # noqa: BLE001
+            return "<" + type(exc).__name__ + ">"
+
+    def describe(mod):
+        out = {}
+        for fn_name in ("documented", "undocumented", "defaults_only"):
+            fn = getattr(mod, fn_name)
+            out[fn_name] = {
+                "doc": fn.__doc__,
+                "name": fn.__name__,
+                "qualname": getattr(fn, "__qualname__", None),
+                "module": getattr(fn, "__module__", None),
+                "signature": signature(fn),
+            }
+        cls = mod.Widget
+        out["class"] = {
+            "doc": cls.__doc__,
+            "qualname": getattr(cls, "__qualname__", None),
+            "module": getattr(cls, "__module__", None),
+            "kind": cls.kind,
+        }
+        inst = cls(3)
+        for method_name in ("__init__", "area", "plain"):
+            bound = getattr(inst, method_name)
+            out["method:" + method_name] = {
+                "doc": bound.__doc__,
+                "qualname": getattr(bound, "__qualname__", None),
+                "name": getattr(bound, "__name__", None),
+                "signature": signature(bound),
+            }
+        out["values"] = [inst.area(2), inst.area(), inst.plain()]
+        return out
+
+    src_snapshot = describe(src_mod)
+    aot_snapshot = describe(aot_mod)
+    mismatches = []
+    for key in sorted(src_snapshot):
+        if src_snapshot[key] != aot_snapshot.get(key):
+            mismatches.append({"key": key, "src": src_snapshot[key], "aot": aot_snapshot.get(key)})
+    return {"mismatches": mismatches, "fields": len(src_snapshot)}
+
+
 def op_leaks(out_dir: Path) -> dict:
     """**引用释放** ✅ —— 用 getrefcount 直接量泄漏 ✅（确定性 ✅，不靠内存采样 ✅）。"""
     mc, mod = _compile("corpus_leaks.py", "cratix_corpus_leaks", out_dir)
@@ -208,6 +268,8 @@ def main() -> int:
             data = op_comprehensions(out_dir)
         elif op == "leaks":
             data = op_leaks(out_dir)
+        elif op == "metadata":
+            data = op_metadata(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

@@ -235,6 +235,23 @@
 - 收益 ✅：少两组 INCREF/DECREF ✅ —— `strings 0.79→0.99×` ✅、`mixed 0.95→0.99×` ✅、`control 0.98→1.05×` ✅；
 - **回归防线** ✅：`corpus_leaks` 加了 `call_refs`（方法调用 ✅）与 `call_fn_refs`（函数调用 ✅）✅，`getrefcount` 差值必须为 0 ✅。
 
+## M3 追加：元数据保真 ✅
+
+**修前** ✅：AOT 函数的 `__doc__` 是 `None` ✅、`inspect.signature` 直接 `ValueError` ✅、
+类与方法的 docstring 丢失 ✅、方法 `qualname` 是内部跳板名 ✅。
+
+**修后** ✅（与源码**逐字段一致** ✅）：
+
+- **模块函数** ✅：`ml_doc` 写成 `名字(签名)\n--\n\n文档` ✅ ->
+  `__text_signature__` 与 `__doc__` 由 CPython 自动拆分 ✅，`inspect.signature(f)` = 源码签名 ✅；
+- **类** ✅：命名空间里放 `__doc__` ✅；
+- **方法** ✅：跳板建好后设 `__doc__` / `__qualname__`（`Widget.area` ✅）/ `__module__` ✅；
+- **方法签名** ✅：参数简单（无 `*args`/`**kw`/仅关键字 ✅、默认值都是字面量 ✅）时生成**显式参数跳板** ✅，
+  否则退回泛型 ✅ —— **语义正确优先** ✅。
+
+**验收** ✅：`op_metadata` 把源码模块与 AOT 模块的 `doc/name/qualname/module/signature` 逐字段比对 ✅，
+零差异 ✅（`tests/test_fallback.py::test_09` ✅）。
+
 ## 下一步
 
 1. **M5 提速** ✅：属性槽位化 ✅ / 类型特化 ✅（`strings` 仍 0.79× ✅）；

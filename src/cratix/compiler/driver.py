@@ -48,6 +48,10 @@ class ModuleCompile:
     module_gen: object = None
     # **常量池** ✅（模块级字面量只创建一次 ✅）
     consts: object = None
+    # **元数据** ✅：函数 -> {doc, sig} ✅（保真到 .pyd 里 ✅）
+    func_meta: dict = field(default_factory=dict)
+    # **类 / 方法的元数据** ✅
+    class_meta: dict = field(default_factory=dict)
 
     @property
     def supported_names(self) -> list:
@@ -120,6 +124,61 @@ def init_symbol_for(module_name: str) -> str:
     """唯一的 init 符号 ✅（PyInit_<末段> 会被同名模块冲突 ✅ —— 用哈希 ✅）。"""
     digest = hashlib.sha1(module_name.encode("utf-8")).hexdigest()[:10]
     return "PyInit_cratix_" + digest
+
+
+def _literal_repr(node) -> str | None:
+    """默认值的源码表示 ✅ —— 只接受**字面量** ✅（否则文本签名解析会失败 ✅）。"""
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, SyntaxError):
+        return None
+    return repr(value)
+
+
+def _text_signature(args: ast.arguments, module_level: bool = True) -> str:
+    """生成 CPython 的 **__text_signature__** ✅（让 `inspect.signature` 可用 ✅）。
+
+    约定 ✅：`$module` 表示模块级 C 函数 ✅（解析器据此跳过它 ✅）。
+    """
+    parts = []
+    if module_level:
+        parts.append("$module")
+    positional = list(getattr(args, "posonlyargs", [])) + list(args.args)
+    defaults = list(args.defaults)
+    pad = len(positional) - len(defaults)
+    for index, arg in enumerate(positional):
+        default_index = index - pad
+        text = arg.arg
+        if default_index >= 0:
+            default = _literal_repr(defaults[default_index])
+            if default is None:
+                return ""  # 有非字面量默认值 ✅ -> 干脆不给签名 ✅（别给假的 ✅）
+            text += "=" + default
+        parts.append(text)
+    if args.vararg is not None:
+        parts.append("*" + args.vararg.arg)
+    elif args.kwonlyargs:
+        parts.append("*")
+    for index, arg in enumerate(args.kwonlyargs):
+        text = arg.arg
+        default_node = args.kw_defaults[index]
+        if default_node is not None:
+            default = _literal_repr(default_node)
+            if default is None:
+                return ""
+            text += "=" + default
+        parts.append(text)
+    if args.kwarg is not None:
+        parts.append("**" + args.kwarg.arg)
+    return "(" + ", ".join(parts) + ")"
+
+
+def _doc_of(node) -> str:
+    """原样取 docstring ✅（`clean=False` ✅ —— `__doc__` 就是原字符串 ✅）。"""
+    try:
+        return ast.get_docstring(node, clean=False) or ""
+    except TypeError:
+        return ""
 
 
 def _source_segment(source: str, node, dedent: bool = False) -> str | None:
@@ -243,6 +302,11 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             continue
         result.functions.append(gen)
         result.plans.append(FunctionPlan(stmt.name, True, ""))
+        # **元数据保真** ✅：docstring + 文本签名 ✅
+        result.func_meta[stmt.name] = {
+            "doc": _doc_of(stmt),
+            "sig": _text_signature(stmt.args, module_level=True),
+        }
         for name in list(gen.params.get("names", [])) + list(gen.params.get("kwonly", [])):
             key_names.append(name)
         # **全局名字的静态键** ✅
@@ -260,6 +324,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             return result
         class_info = {
             "name": stmt.name,
+            "doc": _doc_of(stmt),
             "methods": [],
             "attrs": [],
             # **类装饰器** ✅（建类之后按**逆序**应用 ✅ —— 与 CPython 一致 ✅）
@@ -305,6 +370,12 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     continue
                 # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
                 class_info["methods"].append((item.name, gen))
+                # **方法元数据** ✅：doc + 类名限定的 qualname ✅
+                result.func_meta[stmt.name + "." + item.name] = {
+                    "doc": _doc_of(item),
+                    "qualname": stmt.name + "." + item.name,
+                    "cls": stmt.name,
+                }
                 # **方法参数也要 intern 键** ✅（绑定代码要用 ✅）
                 for pname in list(self_params.get("names", [])) + list(self_params.get("kwonly", [])):
                     key_names.append(pname)
@@ -344,6 +415,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.fallback_code,
         result.classes,
         consts,
+        result.func_meta,
     )
     result.consts = consts
     return result
@@ -384,6 +456,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             fallback_code=module_compile.fallback_code,
             classes=module_compile.classes,
             consts=module_compile.consts,
+            func_meta=module_compile.func_meta,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

@@ -142,6 +142,19 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：元数据保真 ✅（docstring / 签名 / qualname ✅）
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 52 | AOT 函数的 `__doc__` 是 **None** ✅、`inspect.signature` 直接报 `ValueError` ✅ | `PyMethodDef.ml_doc` 传的是 `NULL` ✅；文本签名压根没生成 ✅ | 生成 `名字(签名)\n--\n\n文档` ✅ -> `__text_signature__` 与 `__doc__` 自动各归各位 ✅ |
+| 53 | 加了签名后 `__text_signature__` 仍是 None ✅、`__doc__` 把整串都吐出来 ✅ | **名字前缀是硬要求** ✅：CPython 先比对 `doc[:len(name)] == name` 且紧跟 `(` ✅ —— 少了名字就解析失败 ✅ | ml_doc 前面加**函数名** ✅ |
+| 54 | 类与方法的 `__doc__` 也是 None ✅、`qualname` 是 `_cratix_tb_Widget_area` ✅ | 类命名空间只放了 `__module__` ✅；跳板函数是动态生成的 ✅、没有 doc/qualname ✅ | 类 `ns` 里塞 `__doc__` ✅；跳板建好后设 `__doc__` / `__qualname__` / `__module__` ✅ |
+| 55 | 方法签名显示 `(*args, **kwargs)` ✅ | 跳板一律是泛型 ✅（`inspect` 读的是跳板的 code object ✅） | 参数**简单**时（无 `*args`/`**kw`/仅关键字 ✅、默认值都是字面量 ✅）生成**显式参数**的跳板 ✅；否则退回泛型 ✅（**语义优先** ✅） |
+| 56 | 显式跳板仍然退回泛型 ✅ | `builder` 把"没有默认值"填成 **None** ✅（`defaults` 和 `names` 等长 ✅）—— 我按"长度差"算默认值位置 ✅ -> 到处 None ✅ | 直接按**下标**取 ✅，`None` 视为"无默认值" ✅ |
+
+**验收** ✅：`tests/corpus/corpus_metadata.py` + `tests/aot_worker.py::op_metadata` ✅ ——
+源码模块与 AOT 模块的 `doc/name/qualname/module/signature` **逐字段比对** ✅，必须零差异 ✅。
+
 ## 追加：vectorcall 的**借用语义** ✅（又一次"每轮一次"泄漏 ✅）
 
 | # | 现象 | 根因 | 修法 |

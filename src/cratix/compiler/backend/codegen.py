@@ -122,6 +122,57 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+def trampoline_source(tb_name: str, private: str, params) -> str:
+    """生成**跳板函数**源码 ✅ —— 能给出真实签名时就用真实签名 ✅。
+
+    为什么值得 ✅：`inspect.signature(instance.method)` 会读跳板的 code object ✅ ——
+    泛型跳板（`*args, **kwargs`）会让签名变成 `(*args, **kwargs)` ✅（与源码不一致 ✅）。
+    条件（不满足就退回泛型 ✅，**语义永远正确优先** ✅）：
+      - 没有 `*args` / `**kwargs` / 仅关键字参数 ✅；
+      - 所有默认值都是**字面量** ✅（可以直接写进源码 ✅）。
+    """
+    names = list(params.get("names", []))
+    defaults = list(params.get("defaults", []))
+    if params.get("vararg") or params.get("kwarg") or params.get("kwonly"):
+        return (
+            "def " + tb_name + "(self, *args, **kwargs):" + chr(10)
+            + "    return " + private + "(self, *args, **kwargs)" + chr(10)
+        )
+    parts = []
+    for index, name in enumerate(names):
+        # **builder 把"没有默认值"填成 None** ✅（defaults 与 names 等长 ✅）
+        node = defaults[index] if index < len(defaults) else None
+        if node is None:
+            parts.append(name)
+            continue
+        if node.kind != "const":
+            return (
+                "def " + tb_name + "(self, *args, **kwargs):" + chr(10)
+                + "    return " + private + "(self, *args, **kwargs)" + chr(10)
+            )
+        parts.append(name + "=" + repr(node.get("value")))
+    # 关键字参数在这里会被绑到跳板的同名参数上 ✅ -> 再按位置传下去 ✅（等价 ✅）
+    forwarded = ", ".join(names)
+    return (
+        "def " + tb_name + "(" + ", ".join(parts) + "):" + chr(10)
+        + "    return " + private + "(" + forwarded + ")" + chr(10)
+    )
+
+
+def method_doc(name: str, meta) -> str:
+    """CPython 的 ml_doc 约定 ✅：文本签名 + 分隔符 + 文档 ✅。"""
+    if not meta:
+        return ""
+    doc = meta.get("doc") or ""
+    sig = meta.get("sig") or ""
+    if sig:
+        # **名字前缀是硬要求** ✅：CPython 先比对 doc[:len(name)] == name 且紧跟 "(" ✅
+        # 少了名字 -> 解析失败 ✅ -> __text_signature__ 为 None 且 __doc__ 变成整串 ✅（实测 ✅）
+        # 分隔符是 "\n--\n\n" ✅ -> __text_signature__ 与 __doc__ 各归各位 ✅
+        return name + sig + chr(10) + "--" + chr(10) + chr(10) + doc
+    return doc
+
+
 class ConstantPool:
     """**模块级常量池** ✅ —— 每个字面量只创建一次 ✅。
 
@@ -271,7 +322,7 @@ def module_body_parts(gen: FunctionGen):
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
                                  key_names: list, module_gen=None, alias_init: str | None = None,
                                  fallback_code: dict | None = None, classes: list | None = None,
-                                 consts=None) -> str:
+                                 consts=None, func_meta=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -308,7 +359,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("static PyMethodDef cratix_methods[] = {")
     for gen in functions:
         cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(gen.func_name)
-        out.append("    {" + q + gen.func_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
+        # **元数据保真** ✅：ml_doc 带文本签名 + 文档 ✅（inspect.signature 可用 ✅）
+        _doc = method_doc(gen.func_name, (func_meta or {}).get(gen.func_name))
+        out.append("    {" + q + gen.func_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, " + c_string(_doc) + "},")
     out.append("    {NULL, NULL, 0, NULL}")
     out.append("};")
     out.append("")
@@ -387,10 +440,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         for method_name, _gen in cls.get("methods", []):
             tb_name = "_cratix_tb_" + cls["name"] + "_" + method_name
             private = "_cratix_" + cls["name"] + "_" + method_name
-            src = (
-                "def " + tb_name + "(self, *args, **kwargs):" + chr(10)
-                + "    return " + private + "(self, *args, **kwargs)" + chr(10)
-            )
+            src = trampoline_source(tb_name, private, _gen.params)
             out.append("static const char *cratix_tb_" + c_ident(cls["name"] + "." + method_name) + " = " + c_string(src) + ";")
         out.append("")
     out.append("static struct PyModuleDef cratix_module = {")
@@ -490,6 +540,14 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        if (mod_name == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
         out.append("        PyDict_SetItemString(ns, \"__module__\", mod_name);")
         out.append("        Py_DECREF(mod_name);")
+        # **类文档保真** ✅
+        if cls.get("doc"):
+            out.append("        {")
+            out.append("            PyObject *cd = PyUnicode_FromString(" + c_string(cls["doc"]) + ");")
+            out.append("            if (cd == NULL) { Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyDict_SetItemString(ns, \"__doc__\", cd) < 0) { Py_DECREF(cd); Py_DECREF(ns); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(cd);")
+            out.append("        }")
         # **跳板进命名空间** ✅（普通 Python 函数 ✅ → 作为方法时自动绑定 self ✅ ✅）
         for method_name, _gen in cls.get("methods", []):
             tb = "_cratix_tb_" + cls["name"] + "_" + method_name
@@ -503,6 +561,20 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             # **先设 __name__ 再套装饰器** ✅ —— property 等描述符没有可写的 __name__ ✅
             out.append("            if (PyObject_SetAttrString(tbv, \"__name__\", mn) < 0) { PyErr_Clear(); }")
             out.append("            Py_DECREF(mn);")
+            # **方法元数据保真** ✅：__doc__ / __qualname__ / __module__ ✅
+            _mmeta = (func_meta or {}).get(cls["name"] + "." + method_name) or {}
+            if _mmeta.get("doc"):
+                out.append("            {")
+                out.append("                PyObject *dd = PyUnicode_FromString(" + c_string(_mmeta["doc"]) + ");")
+                out.append("                if (dd != NULL) { PyObject_SetAttrString(tbv, \"__doc__\", dd); Py_DECREF(dd); }")
+                out.append("            }")
+            if _mmeta.get("qualname"):
+                out.append("            {")
+                out.append("                PyObject *qn = PyUnicode_FromString(" + c_string(_mmeta["qualname"]) + ");")
+                out.append("                if (qn != NULL) { PyObject_SetAttrString(tbv, \"__qualname__\", qn); Py_DECREF(qn); }")
+                out.append("            }")
+            out.append("            PyObject_SetAttrString(tbv, \"__module__\", PyUnicode_FromString(" + q + module_name + q + "));")
+            out.append("            PyErr_Clear();")
             # **装饰器** ✅：按**逆序**应用 ✅（@a @b def f -> a(b(f)) ✅），与 CPython 一致 ✅
             for segment in reversed(decorators):
                 out.append("            {")
@@ -561,7 +633,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     return nl.join(out) + nl
 
 def generate_module(module_name: str, init_symbol: str, functions: list, key_names: list,
-                    module_gen=None, alias_init: str | None = None) -> str:
+                    module_gen=None, alias_init: str | None = None, func_meta=None) -> str:
     """生成整个模块的 C 代码 ✅（多阶段初始化 ✅ —— 与 stub 的加载桥契合 ✅）。"""
     nl = chr(10)
     q = chr(34)
@@ -591,7 +663,9 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
     out.append("static PyMethodDef cratix_methods[] = {")
     for gen in functions:
         cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(gen.func_name)
-        out.append("    {" + q + gen.func_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
+        # **元数据保真** ✅：ml_doc 带文本签名 + 文档 ✅（inspect.signature 可用 ✅）
+        _doc = method_doc(gen.func_name, (func_meta or {}).get(gen.func_name))
+        out.append("    {" + q + gen.func_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, " + c_string(_doc) + "},")
     out.append("    {NULL, NULL, 0, NULL}")
     out.append("};")
     out.append("")
