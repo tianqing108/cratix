@@ -195,7 +195,7 @@ def generate_function(gen: FunctionGen) -> str:
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
-    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
+    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS + 1) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
     decls.append("    PyObject *cratix_mname = NULL;")
     # **try 栈** ✅（每个函数一份 ✅ —— try/except 的实现状态 ✅ ✅）
@@ -247,7 +247,7 @@ def module_body_parts(gen: FunctionGen):
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
-    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS) + "];")
+    decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS + 1) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
     decls.append("    PyObject *cratix_mname = NULL;")
     # **try 栈** ✅（每个函数一份 ✅ —— try/except 的实现状态 ✅ ✅）
@@ -1639,18 +1639,18 @@ class FunctionGen:
         # （实测：`"-".join([w.upper() for w in words])` 用错接收者 ✅ -> 结果错 ✅）。
         arg_vals = [self.emit_expr(child) for child in positional]
         kw_vals = [(name, self.emit_expr(child)) for name, child in keywords]
-        # **vargs[0] 是对象** ✅（VectorcallMethod 的约定 ✅ ✅）
-        self.emit("cratix_vargs[0] = " + obj + ";")
-        self.emit("Py_INCREF(cratix_vargs[0]);")
+        # **vargs[1] 是对象** ✅（VectorcallMethod 的约定 ✅ —— 第 0 格留给草稿 ✅）
+        # **不要 INCREF** ✅：vectorcall 只**借用**参数 ✅ ——
+        # 原来 INCREF 进 vargs 却从不释放 ✅ -> 每次带参数的调用泄漏一个引用 ✅（实测 200 轮 +200 ✅）；
+        # 临时变量本来就持有引用 ✅ -> 由函数/循环末尾的清理统一释放 ✅。
+        self.emit("cratix_vargs[1] = " + obj + ";")
         for i, v in enumerate(arg_vals):
-            self.emit("cratix_vargs[" + str(i + 1) + "] = " + v + ";")
-            self.emit("Py_INCREF(cratix_vargs[" + str(i + 1) + "]);")
+            self.emit("cratix_vargs[" + str(i + 2) + "] = " + v + ";")
         if n_kw:
             self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
             for j, (name, v) in enumerate(kw_vals):
-                self.emit("cratix_vargs[" + str(n_pos + 1 + j) + "] = " + v + ";")
-                self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + 1 + j) + "]);")
+                self.emit("cratix_vargs[" + str(n_pos + 2 + j) + "] = " + v + ";")
                 self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
                 self.emit("if (cratix_kn == NULL) goto cratix_error;")
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
@@ -1658,7 +1658,7 @@ class FunctionGen:
             self.emit("cratix_kwnames = NULL;")
         # **方法名走常量池** ✅ —— 原来**每次调用**都 `PyUnicode_FromString` ✅（真分配 ✅）
         mname = self.emit_const_piece(target.get("attr"))
-        self.emit(t + " = PyObject_VectorcallMethod(" + mname + ", cratix_vargs, " + str(n + 1) + " | PY_VECTORCALL_ARGUMENTS_OFFSET, cratix_kwnames);")
+        self.emit(t + " = PyObject_VectorcallMethod(" + mname + ", cratix_vargs + 1, " + str(n + 1) + " | PY_VECTORCALL_ARGUMENTS_OFFSET, cratix_kwnames);")
         self.emit("Py_DECREF(" + mname + ");")
         self.emit(mname + " = NULL;")
         if n_kw:
@@ -1707,21 +1707,20 @@ class FunctionGen:
         # 参数里的嵌套调用会覆盖已填好的槽位 ✅（与 emit_method_call 同一个坑 ✅）。
         arg_vals = [self.emit_expr(child) for child in positional]
         kw_vals = [(name, self.emit_expr(child)) for name, child in keywords]
+        # **借用语义** ✅：vectorcall 不取走参数 ✅ -> 不 INCREF ✅（临时变量负责持有 ✅）
         for i, v in enumerate(arg_vals):
-            self.emit("cratix_vargs[" + str(i) + "] = " + v + ";")
-            self.emit("Py_INCREF(cratix_vargs[" + str(i) + "]);")
+            self.emit("cratix_vargs[" + str(i + 1) + "] = " + v + ";")
         if n_kw:
             self.emit("cratix_kwnames = PyTuple_New(" + str(n_kw) + ");")
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
             for j, (name, v) in enumerate(kw_vals):
-                self.emit("cratix_vargs[" + str(n_pos + j) + "] = " + v + ";")
-                self.emit("Py_INCREF(cratix_vargs[" + str(n_pos + j) + "]);")
+                self.emit("cratix_vargs[" + str(n_pos + j + 1) + "] = " + v + ";")
                 self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
                 self.emit("if (cratix_kn == NULL) goto cratix_error;")
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
         else:
             self.emit("cratix_kwnames = NULL;")
-        self.emit(t + " = PyObject_Vectorcall(" + func + ", cratix_vargs, " + str(n) + ", cratix_kwnames);")
+        self.emit(t + " = PyObject_Vectorcall(" + func + ", cratix_vargs + 1, " + str(n) + ", cratix_kwnames);")
         if n_kw:
             self.emit("Py_DECREF(cratix_kwnames);")
             self.emit("cratix_kwnames = NULL;")

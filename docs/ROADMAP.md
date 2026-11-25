@@ -222,9 +222,18 @@
 | 全局/内建名字 ✅ | 每次 `InternFromString` + 两次查字典 ✅ | 模块 init intern 成**静态键** ✅ + `cratix_load_key` ✅ | `mixed` **0.59× → 0.95×** ✅ |
 | f-string ✅ | 常量片段每次新建 ✅ + 单段也建列表 ✅ | 常量走池 ✅ / 单段直接转移 ✅ / `PyList_New(n)+SET_ITEM` ✅ | `strings` **0.52× → 0.79×** ✅ |
 
-**新口径实测** ✅（`bench_aot --repeat 5` ✅）：`add 1.24×` ✅ / `control 0.98×` ✅ / `strings 0.79×` ✅ /
-`containers 1.03×` ✅ / `mixed 0.95×` ✅ —— **几何平均（corpus_basic）= 0.98×** ✅（本轮起点约 0.81× ✅）；
-`corpus_consts` ✅ `loop_str 1.49×` ✅ / `loop_num 1.13×` ✅ —— 全部用例几何平均 **1.07×** ✅。
+**新口径实测** ✅（`bench_aot --repeat 5` ✅）：`add 1.43×` ✅ / `control 1.05×` ✅ / `strings 0.99×` ✅ /
+`containers 1.00×` ✅ / `mixed 0.99×` ✅ —— **几何平均（corpus_basic）= 1.08×** ✅（本轮起点约 0.81× ✅）；
+`corpus_consts` ✅ `loop_str 1.51×` ✅ / `loop_num 1.14×` ✅ —— 全部用例几何平均 **1.15×** ✅。
+
+### 追加：vectorcall 借用语义 ✅（第 50/51 号坑 ✅）
+
+- `PyObject_Vectorcall(Method)` **只借用参数** ✅ —— 原来 INCREF 进 `cratix_vargs` 后从不释放 ✅
+  -> **带参数的调用每次泄漏一个引用** ✅（实测 `count(obj)` 200 轮 +200 ✅）；
+- 同时 `PY_VECTORCALL_ARGUMENTS_OFFSET` 要求 `argv[-1]` 是**合法草稿格** ✅ —— 原来传数组首地址 ✅ → 越界写（UB ✅）；
+- 修法 ✅：数组多留一格 ✅ + 参数从下标 1 起 ✅ + 传 `cratix_vargs + 1` ✅ + **不 INCREF** ✅；
+- 收益 ✅：少两组 INCREF/DECREF ✅ —— `strings 0.79→0.99×` ✅、`mixed 0.95→0.99×` ✅、`control 0.98→1.05×` ✅；
+- **回归防线** ✅：`corpus_leaks` 加了 `call_refs`（方法调用 ✅）与 `call_fn_refs`（函数调用 ✅）✅，`getrefcount` 差值必须为 0 ✅。
 
 ## 下一步
 

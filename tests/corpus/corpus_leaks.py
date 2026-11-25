@@ -47,6 +47,29 @@ def with_break(obj, n):
     return total
 
 
+def call_refs(obj, n):
+    """**方法调用** ✅：参数是借用引用 ✅ —— 不能 INCREF 后不释放 ✅。"""
+    total = 0
+    for index in range(n):
+        total = total + [1, 2, 3].count(obj)
+    return total
+
+
+def take_two(first, second):
+    """纯为**带参函数调用** ✅（vectorcall ✅）准备的被调方 ✅。"""
+    if first is second:
+        return 1
+    return 0
+
+
+def call_fn_refs(obj, n):
+    """**函数调用（vectorcall）** ✅：参数是借用引用 ✅ —— 不能 INCREF 后不释放 ✅。"""
+    total = 0
+    for index in range(n):
+        total = total + take_two(obj, obj)
+    return total
+
+
 def try_refs(obj, n):
     total = 0
     for index in range(n):

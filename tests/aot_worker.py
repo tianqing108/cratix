@@ -157,6 +157,8 @@ def op_leaks(out_dir: Path) -> dict:
         ("with_continue", 100),
         ("with_break", 10),
         ("try_refs", 100),
+        ("call_refs", 100),
+        ("call_fn_refs", 100),
     ]
     for name, n in cases:
         sentry = Sentry()
