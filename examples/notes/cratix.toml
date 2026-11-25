@@ -1,0 +1,17 @@
+# 示例：一个**真实一点**的小应用 ✅
+# 用到：类 ✅ / 异常 ✅ / f-string ✅ / JSON ✅ / argparse ✅ / 生成器表达式 ✅ / 类方法 ✅
+# 目的 ✅：不只是 hello world ✅ —— 端到端检验 AOT 编译器在"像应用"的代码上能不能打 ✅。
+
+[project]
+name = "notes"
+version = "0.2.0"
+entry = "notes.app:main"
+
+[build]
+targets = ["onefile"]
+console = true
+
+[compiler]
+backend = "aot"
+probe = "on"
+strict_aot = true

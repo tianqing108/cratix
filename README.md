@@ -135,7 +135,8 @@ src/cratix/
   stub/               启动器 C 源码（memdl / VFS / TLS 修补 / zip 读取）
 scripts/vendor_sync.py  vendor 同步（改名 + 去业务化改写，幂等）
 tests/                 单元 + 端到端（只用标准库 unittest）
-examples/hello/        示例工程
+examples/hello/        最小示例工程
+examples/notes/        **真实一点的示例**（类/异常/JSON/子命令，跑 --strict-aot）
 ```
 
 ---

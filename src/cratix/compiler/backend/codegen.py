@@ -2882,9 +2882,10 @@ class FunctionGen:
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
             for j, (name, v) in enumerate(kw_vals):
                 self.emit("cratix_vargs[" + str(n_pos + 2 + j) + "] = " + v + ";")
-                self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
-                self.emit("if (cratix_kn == NULL) goto cratix_error;")
-                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
+                kn = self.new_tmp()
+                self.emit(kn + " = PyUnicode_FromString(" + c_string(name) + ");")
+                self.emit("if (" + kn + " == NULL) goto cratix_error;")
+                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", " + kn + ");")
         else:
             self.emit("cratix_kwnames = NULL;")
         # **方法名走常量池** ✅ —— 原来**每次调用**都 `PyUnicode_FromString` ✅（真分配 ✅）
@@ -2946,9 +2947,12 @@ class FunctionGen:
             self.emit("if (cratix_kwnames == NULL) goto cratix_error;")
             for j, (name, v) in enumerate(kw_vals):
                 self.emit("cratix_vargs[" + str(n_pos + j + 1) + "] = " + v + ";")
-                self.emit("PyObject *cratix_kn = PyUnicode_FromString(" + c_string(name) + ");")
-                self.emit("if (cratix_kn == NULL) goto cratix_error;")
-                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", cratix_kn);")
+                # **用临时变量** ✅ —— 以前写 `PyObject *cratix_kn = ...` ✅
+                # 同一个函数里出现**两次关键字调用**就会 **C2374 重定义** ✅（真实应用一上来就踩中 ✅）
+                kn = self.new_tmp()
+                self.emit(kn + " = PyUnicode_FromString(" + c_string(name) + ");")
+                self.emit("if (" + kn + " == NULL) goto cratix_error;")
+                self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", " + kn + ");")
         else:
             self.emit("cratix_kwnames = NULL;")
         # **nargsf 只算"位置参数"** ✅ —— 关键字的值排在后面 ✅、个数由 kwnames 决定 ✅。
