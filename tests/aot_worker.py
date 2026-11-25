@@ -194,6 +194,31 @@ def op_statements(out_dir: Path) -> dict:
     }
 
 
+def op_namespace(out_dir: Path) -> dict:
+    """**命名空间干净** ✅ —— AOT 模块不该泄漏编译器内部名字 ✅（#129 ✅）。"""
+    leaked = {}
+    for corpus in ("corpus_closures.py", "corpus_genexp.py", "corpus_lambda.py",
+                   "corpus_local_class.py", "corpus_classes.py"):
+        path = Path(__file__).resolve().parent / "corpus" / corpus
+        if not path.is_file():
+            continue
+        mc, mod = _compile(corpus, "cratix_ns_" + path.stem, out_dir)
+        # **装饰器跳板**（`_cratix_tb_*` / `_cratix_raw_*`）暂时留在 globals ✅ ——
+        # 它们是 **Python 函数** ✅，按名字查 `__globals__` ✅（下一轮改成"把函数当参数传"就能搬走 ✅）。
+        def _is_leak(name: str) -> bool:
+            if name.startswith("_cratix_tb_") or name.startswith("_cratix_dtb_") or name.startswith("_cratix_raw_"):
+                return False
+            if name.startswith("_cratix_") and "_" in name[9:]:
+                # 类方法跳板用 `_cratix_<类>_<方法>` ✅
+                return False
+            return name.startswith("cratix_") or name.startswith("_cratix_")
+
+        names = [n for n in dir(mod) if _is_leak(n)]
+        if names:
+            leaked[corpus] = names[:8]
+    return {"leaked": leaked}
+
+
 def op_forms(out_dir: Path) -> dict:
     """**常见形态差分** ✅ —— 源码版当基准 ✅ 逐项比 ✅。"""
     import importlib.util
@@ -731,6 +756,8 @@ def main() -> int:
             data = op_operators(out_dir)
         elif op == "forms":
             data = op_forms(out_dir)
+        elif op == "namespace":
+            data = op_namespace(out_dir)
         elif op == "statements":
             data = op_statements(out_dir)
         else:

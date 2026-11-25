@@ -468,6 +468,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
 
     out.append("")
     out.append("static PyObject *cratix_globals = NULL;")
+    out.append("static PyObject *cratix_helper_ns = NULL;")
     out.append("static PyObject *cratix_builtins = NULL;")
     out.append("static PyObject *cratix_builtins_module = NULL;")
     out.append("")
@@ -483,6 +484,9 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append(generate_function(gen))
         out.append("")
     out.append("static PyMethodDef cratix_methods[] = {")
+    _internal_prefixes = ("_cratix_", "cratix_")
+    internal_gens = [g for g in functions if g.func_name.startswith(_internal_prefixes)]
+    public_gens = [g for g in functions if not g.func_name.startswith(_internal_prefixes)]
     for gen in functions:
         cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(gen.func_name)
         # **元数据保真** ✅：ml_doc 带文本签名 + 文档 ✅（inspect.signature 可用 ✅）
@@ -505,6 +509,23 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("    cratix_builtins_module = PyImport_AddModule(\"builtins\");")
     out.append("    if (cratix_builtins_module == NULL) return -1;")
     out.append("    cratix_builtins = PyModule_GetDict(cratix_builtins_module);")
+    # **内部辅助命名空间** ✅（#129 ✅）—— 生成器辅助 ✅ 跳板 ✅ 类工厂 ✅ 都放这里 ✅
+    out.append("    cratix_helper_ns = PyDict_New();")
+    out.append("    if (cratix_helper_ns == NULL) return -1;")
+    if internal_gens:
+        _names = [_g.func_name for _g in internal_gens]
+        out.append("    {")
+        out.append("        static const char *const cratix_internal_names[] = {" + ", ".join(c_string(_n) for _n in _names) + ", NULL};")
+        out.append("        for (int i = 0; cratix_internal_names[i] != NULL; i++) {")
+        out.append("            PyObject *v = PyDict_GetItemString(cratix_globals, cratix_internal_names[i]);")
+        out.append("            if (v == NULL) continue;")
+        out.append("            Py_INCREF(v);")
+        out.append("            int rc = PyDict_SetItemString(cratix_helper_ns, cratix_internal_names[i], v);")
+        out.append("            Py_DECREF(v);")
+        out.append("            if (rc < 0) return -1;")
+        out.append("            if (PyDict_DelItemString(cratix_globals, cratix_internal_names[i]) < 0) PyErr_Clear();")
+        out.append("        }")
+        out.append("    }")
     out.append("    if (cratix_builtins == NULL) return -1;")
     # **模块字典要有 __builtins__** ✅ —— exec/eval 源码时（回退函数 ✅/跳板 ✅/lambda ✅）
     # CPython 会去 globals 找它 ✅；没有就往上找帧 ✅ -> 没有帧时 `KeyError: '__builtins__'` ✅（实测 ✅）
@@ -523,7 +544,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **类工厂** ✅（函数里"捕获外层局部"的类 ✅ —— 用工厂函数造出**真闭包** ✅）
     for _key, factory in (class_factories or {}).items():
         out.append("    {")
-        out.append("        PyObject *cratix_fac = PyRun_String(" + c_string(factory["source"]) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        PyObject *cratix_fac = PyRun_String(" + c_string(factory["source"]) + ", Py_file_input, cratix_globals, cratix_helper_ns);")
         out.append("        if (cratix_fac == NULL) return -1;")
         out.append("        Py_DECREF(cratix_fac);")
         out.append("    }")
@@ -532,7 +553,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # 放在 globals 之前实测报 "globals must be a real dict" ✅
     for gen_name in sorted(genexps or {}):
         out.append("    {")
-        out.append("        PyObject *cratix_g = PyRun_String(" + c_string(genexps[gen_name]) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        PyObject *cratix_g = PyRun_String(" + c_string(genexps[gen_name]) + ", Py_file_input, cratix_globals, cratix_helper_ns);")
         out.append("        if (cratix_g == NULL) return -1;")
         out.append("        Py_DECREF(cratix_g);")
         out.append("    }")
@@ -586,6 +607,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("            return -1;")
         out.append("        }")
         out.append("        Py_INCREF(cratix_raw);")
+        # **私有名留在 globals** ✅ —— 跳板是 **Python 函数** ✅，它按名字查 `__globals__` ✅，
+        # 所以这些名字必须在模块字典里 ✅（#129 的"装饰器跳板"部分留待下一轮 ✅）。
         out.append("        if (PyDict_SetItemString(cratix_globals, " + c_string(raw_name) + ", cratix_raw) < 0) { Py_DECREF(cratix_raw); return -1; }")
         out.append("        Py_DECREF(cratix_raw);")
         tb_source = trampoline_source(tb_name, raw_name, {"names": [], "vararg": "cratix_args", "kwarg": "cratix_kw"})
@@ -1439,7 +1462,7 @@ class FunctionGen:
         if site is None:
             raise Unsupported("嵌套定义（未登记）")
         fn = self.new_tmp()
-        self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(site["name"]) + ");")
+        self.emit(fn + " = PyDict_GetItemString(cratix_helper_ns, " + c_string(site["name"]) + ");")
         self.emit("if (" + fn + " == NULL) {")
         self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: closure helper missing\");")
         self.emit("    goto cratix_error;")
@@ -2150,7 +2173,7 @@ class FunctionGen:
             if factory:
                 # **类工厂** ✅ —— 带实参调用 ✅ -> 方法拿到**真闭包** ✅
                 fn = self.new_tmp()
-                self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(factory["name"]) + ");")
+                self.emit(fn + " = PyDict_GetItemString(cratix_helper_ns, " + c_string(factory["name"]) + ");")
                 self.emit("if (" + fn + " == NULL) { PyErr_SetString(PyExc_NameError, \"cratix: class factory missing\"); goto cratix_error; }")
                 fn_copy = self.new_tmp()
                 self.emit(fn_copy + " = Py_NewRef(" + fn + ");")
@@ -2596,7 +2619,7 @@ class FunctionGen:
             if not name:
                 raise Unsupported("lambda（未登记）")
             fn = self.new_tmp()
-            self.emit(fn + " = PyDict_GetItemString(cratix_globals, " + c_string(name) + ");")
+            self.emit(fn + " = PyDict_GetItemString(cratix_helper_ns, " + c_string(name) + ");")
             self.emit("if (" + fn + " == NULL) {")
             self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: lambda helper missing\");")
             self.emit("    goto cratix_error;")
@@ -3146,7 +3169,7 @@ class FunctionGen:
         # **最外层可迭代对象立即求值** ✅
         first_iter = self.emit_expr(gens[0][1])
         helper = self.new_tmp()
-        self.emit(helper + " = PyDict_GetItemString(cratix_globals, " + c_string(name) + ");")
+        self.emit(helper + " = PyDict_GetItemString(cratix_helper_ns, " + c_string(name) + ");")
         self.emit("if (" + helper + " == NULL) {")
         self.emit("    PyErr_SetString(PyExc_NameError, \"cratix: generator helper missing\");")
         self.emit("    goto cratix_error;")

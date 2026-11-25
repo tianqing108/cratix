@@ -171,6 +171,18 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **教训** ✅：**先删死代码再改结构** ✅ —— 否则会在一模一样的两段代码里改错一半 ✅，
 而且**编译照样通过** ✅、只有测试才炸 ✅。
 
+**第二轮（已修好 ✅）** ✅：删掉死代码后只剩一份生成器 ✅，于是**一次改干净** ✅：
+
+1. `cratix_methods[]` 里**只放公开函数** ✅；内部辅助（`_cratix_inner_*` ✅ `_cratix_lambda_*` ✅）虽然
+   仍然由 `PyModule_AddFunctions` 注册 ✅，但在 `run_body` 里**立刻搬进 `cratix_helper_ns` 并删掉全局名** ✅；
+2. 类工厂 ✅ / 生成器表达式辅助 ✅ / 装饰方法跳板 ✅ 的**定义与取用**统一走 `cratix_helper_ns` ✅
+   （`PyRun_String(..., globals, helper_ns)` ✅ —— 函数的 `__globals__` 仍是模块字典 ✅，所以它们照样看得见模块全局 ✅）；
+3. **回归测试** ✅：`test_32_namespace_clean` 检查 5 个语料的 AOT 模块 ✅
+   `dir(mod)` 里**一个 `cratix_*` / `_cratix_*` 都不许有** ✅。
+
+**实测** ✅：closures ✅ / genexp ✅ / lambda ✅ / 局部类 ✅ / 普通类 5 个语料 **泄漏 0** ✅；
+全量标准库仍是 **0 崩溃** ✅、AOT **36139**（0.954 ✅）；`examples/notes` 冻结 exe `probe_frozen` **6/6** ✅。
+
 ## 追加：#136 **语句组合差分**（两个"硬失败"被改成明确回退 ✅）
 
 第三个差分语料 `tests/corpus/corpus_statements.py` ✅：

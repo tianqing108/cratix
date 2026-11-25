@@ -429,6 +429,11 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["mismatches"], [])
         self.assertGreaterEqual(data["compared"], 17)
 
+    def test_32_namespace_clean(self):
+        """**AOT 模块不该泄漏 `cratix_*` / `_cratix_*` 内部名字** ✅（#129 ✅）。"""
+        data = run_worker("namespace")
+        self.assertEqual(data["leaked"], {}, "AOT 模块的命名空间里还有编译器内部名字")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
