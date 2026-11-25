@@ -61,6 +61,10 @@ class ModuleCompile:
     source_path: str = ""
     # **类级回退** ✅（[(顺序, 源码)] ✅）
     fallback_classes: list = field(default_factory=list)
+    # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
+    body_marks: list = field(default_factory=list)
+    # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
+    class_order: list = field(default_factory=list)
 
     @property
     def supported_names(self) -> list:
@@ -295,8 +299,15 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
 
     # --- 模块级语句 ✅ ---
     module_stmts = []
+    # **类的源码位置** ✅ —— 类必须**按源码顺序**创建 ✅（`csv.py` 那种
+    # `register_dialect('excel', excel)` 就在模块体里用到了类 ✅）。
+    class_order: list = []
     for stmt in tree.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(stmt, ast.ClassDef):
+            # **类按源码位置插进模块体** ✅（前面已经执行了 len(module_stmts) 条语句 ✅）
+            class_order.append((len(module_stmts), stmt.name, False))
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not _module_level_supported(stmt):
             result.module_ok = False
@@ -345,7 +356,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     fallback_classes: list = []
     class_names = {stmt.name for stmt in tree.body if isinstance(stmt, ast.ClassDef)}
     # **顺序风险** ✅：类在模块体之后创建 ✅ -> 若模块体里就用到类的名字 ✅ 顺序就错了 ✅
-    def _module_scope_names(node) -> set:
+    def _unused_module_scope_names(node) -> set:  # noqa: D401 - 保留历史实现，不再使用
         """只算**模块级真的会执行**的名字 ✅ —— 不进 def/lambda/class 体 ✅（那里不立刻执行 ✅）。"""
         found: set = set()
 
@@ -360,14 +371,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         walk(node)
         return found
 
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
-            continue
-        used = _module_scope_names(stmt)
-        if used & class_names:
-            result.module_ok = False
-            result.module_reason = "模块体引用了类（创建顺序无法保证）"
-            return result
+    # **不再需要"模块体引用类"的拦截** ✅ —— 类现在**按源码位置**创建 ✅
 
     # **模块级装饰器** ✅（名字 -> 装饰器表达式 ✅）
     decorated_functs: list = []
@@ -652,6 +656,10 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             segment = _source_segment(source, stmt)
             if segment:
                 fallback_classes.append((stmt.lineno, segment))
+                class_order = [
+                    (pos, name, True if name == stmt.name else is_fb)
+                    for (pos, name, is_fb) in class_order
+                ]
                 result.plans.append(FunctionPlan(stmt.name, False, exc.reason))
                 continue
             result.module_ok = False
@@ -793,6 +801,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         )
             for stmt in module_ir.get("body", []):
                 module_gen.emit_stmt(stmt)
+                # **每条语句结束时的行数** ✅ —— 类要按源码位置插进模块体 ✅
+                module_gen.stmt_marks.append(len(module_gen.lines))
         except Unsupported as exc:
             result.module_ok = False
             result.module_reason = exc.reason
@@ -801,12 +811,14 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     if module_gen is not None:
         key_names.extend(sorted(module_gen.global_names))
         result.genexp_sources.update(module_gen.genexp_sources)
+    result.body_marks = list(module_gen.stmt_marks) if module_gen is not None else []
     # **类信息总表** ✅（属性槽位快路径用 ✅）—— 必须在生成函数**之后**汇总 ✅，
     # 因为那时才知道每个类最终有哪些槽位 ✅；生成函数时先用**声明好的**表 ✅。
     result.key_names = key_names
     result.module_gen = module_gen
     result.decorated_functions = decorated_functs
     result.fallback_classes = fallback_classes
+    result.class_order = class_order
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
     # → stub 的 is_def 判定为假 ✅ → 直接返回模块 ✅ → 模块体已在 init 里执行 ✅
     # → meta.json 标 exec_done ✅ → 引导模块不再调 exec_def ✅（否则会重跑 ✅）。
@@ -825,6 +837,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.decorated_functions,
         source_file=result.source_path,
         fallback_classes=result.fallback_classes,
+        class_order=result.class_order,
+        body_marks=result.body_marks,
     )
     result.consts = consts
     return result
@@ -869,6 +883,8 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             decorated_functions=module_compile.decorated_functions,
             source_file=module_compile.source_path,
             fallback_classes=module_compile.fallback_classes,
+            class_order=module_compile.class_order,
+            body_marks=module_compile.body_marks,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

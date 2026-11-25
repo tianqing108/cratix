@@ -158,6 +158,16 @@ def const_expr(value) -> str:
     raise Unsupported("常量类型：" + type(value).__name__)
 
 
+def _class_source_name(source: str) -> str:
+    """从类源码里取类名 ✅（回退类按位置插入时要用 ✅）。"""
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("class "):
+            rest = stripped[6:].split("(")[0].split(":")[0].strip()
+            return rest
+    return ""
+
+
 class _CellRewriter(ast.NodeTransformer):
     """把**捕获的名字**改写成 `_cratix_cells["名字"]` ✅。
 
@@ -403,7 +413,7 @@ def module_body_parts(gen: FunctionGen):
         cleanup.append("    Py_XDECREF(" + name + ");")
     for name in gen.tmp_names:
         cleanup.append("    Py_XDECREF(" + name + ");")
-    return decls, list(gen.lines), cleanup
+    return decls, list(gen.lines), cleanup, list(getattr(gen, "stmt_marks", []))
 
 
 
@@ -413,7 +423,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  fallback_code: dict | None = None, classes: list | None = None,
                                  consts=None, func_meta=None, genexps=None,
                                  decorated_functions=None, source_file="",
-                                 fallback_classes=None) -> str:
+                                 fallback_classes=None, class_order=None,
+                                 body_marks=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -463,7 +474,7 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     body_decls = []
     body_cleanup = []
     if module_gen is not None:
-        body_decls, body_lines, body_cleanup = module_body_parts(module_gen)
+        body_decls, body_lines, body_cleanup, body_marks = module_body_parts(module_gen)
         out.extend(body_decls)
     out.append("    cratix_globals = PyModule_GetDict(m);")
     out.append("    if (cratix_globals == NULL) return -1;")
@@ -495,15 +506,41 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        Py_DECREF(cratix_g);")
         out.append("    }")
     # **模块体先跑** ✅ —— 装饰器名往往来自模块体的 import ✅（实测：先套装饰器会 NameError ✅）
-    if module_gen is not None:
-        out.extend(body_lines)
-    # **类级回退** ✅ —— 不支持的类用**源码 exec** ✅（顺序与 AOT 类一致 ✅：模块体之后 ✅）
-    for _order, class_source in sorted(fallback_classes or []):
-        out.append("    {")
-        out.append("        PyObject *cratix_cls_src = PyRun_String(" + c_string(class_source) + ", Py_file_input, cratix_globals, cratix_globals);")
-        out.append("        if (cratix_cls_src == NULL) return -1;")
-        out.append("        Py_DECREF(cratix_cls_src);")
-        out.append("    }")
+    # **模块体 + 类创建：按源码顺序交错** ✅
+    # **没有模块体也要建类** ✅（纯函数/类模块很常见 ✅ —— 以前这里把类漏掉了 ✅）
+    marks = list(body_marks or [])
+    order = sorted(class_order or [])
+    cursor = 0
+    if True:
+        if module_gen is None:
+            body_lines = []
+            marks = []
+        for (pos, name, is_fallback) in order:
+            end = marks[pos - 1] if (pos > 0 and pos - 1 < len(marks)) else (0 if pos == 0 else len(body_lines))
+            out.extend(body_lines[cursor:end])
+            cursor = end
+            if is_fallback:
+                for _order, class_source in (fallback_classes or []):
+                    if _order and _class_source_name(class_source) == name:
+                        out.append("    {")
+                        out.append("        PyObject *cratix_cls_src = PyRun_String(" + c_string(class_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+                        out.append("        if (cratix_cls_src == NULL) return -1;")
+                        out.append("        Py_DECREF(cratix_cls_src);")
+                        out.append("    }")
+                        break
+            else:
+                out.append("    if (cratix_make_" + c_ident(name) + "() < 0) return -1;")
+        out.extend(body_lines[cursor:])
+        # **没被 class_order 覆盖的回退类** ✅（理论上不会有 ✅ —— 保底 ✅）
+        covered = {name for (_pos, name, is_fb) in order if is_fb}
+        for _order, class_source in (fallback_classes or []):
+            if _class_source_name(class_source) in covered:
+                continue
+            out.append("    {")
+            out.append("        PyObject *cratix_cls_src = PyRun_String(" + c_string(class_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+            out.append("        if (cratix_cls_src == NULL) return -1;")
+            out.append("        Py_DECREF(cratix_cls_src);")
+            out.append("    }")
     # **模块级装饰器** ✅ —— 原生实现已经是模块属性 ✅；造一个 **Python 跳板** ✅
     # （把原生函数绑成私有名 ✅ 避免自引用递归 ✅），套上装饰器 ✅ 再换回公开名 ✅。
     for func_name, decorator_sources in (decorated_functions or []):
@@ -724,8 +761,14 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        if (res == NULL) { Py_DECREF(m); return NULL; }")
         out.append("        Py_DECREF(res);")
         out.append("    }")
-    # --- 类 ✅：用堆类型创建 ✅（type(name, (object,), ns) ✅）---
+    # --- 类 ✅：每个类生成一个 `cratix_make_<类名>()` ✅ ---
+    # **为什么要拆成函数** ✅：类必须**按源码位置**创建 ✅（例如 `csv.py` 的
+    # `register_dialect('excel', excel)` 就在模块体里用到了类 ✅）。
+    # 拆开之后 ✅：模块体在正确的语句边界上调用 ✅，函数定义放在 init 之后 ✅（前面有前置声明 ✅）。
+    class_makers: list = []
     for cls in classes:
+        saved_out = out
+        out = []
         # **每个类自己的描述符集合** ✅（循环不隔离作用域 ✅ —— 复用上一个类的集合会漏跳过 ✅）
         descriptors = set(cls.get("descriptor_methods") or ())
         table = "cratix_cls_" + c_ident(cls["name"]) + "_methods"
@@ -858,6 +901,12 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("        if (PyDict_SetItemString(cratix_globals, " + q + cls["name"] + q + ", cls) < 0) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
         out.append("        Py_DECREF(cls);")
         out.append("    }")
+        maker_lines = [
+            line.replace("Py_DECREF(m); return NULL;", "return -1;")
+            for line in out
+        ]
+        out = saved_out
+        class_makers.append((cls["name"], maker_lines))
     out.append("    return m;")
     out.append("}")
     if alias_init:
@@ -865,8 +914,20 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("PyMODINIT_FUNC " + alias_init + "(void) {")
         out.append("    return " + init_symbol + "();")
         out.append("}")
+    # **类创建函数定义** ✅（放在 init 之后 ✅ —— 前面已有前置声明 ✅）
+    for cls_name, maker_lines in class_makers:
+        out.append("")
+        out.append("static int cratix_make_" + c_ident(cls_name) + "(void) {")
+        out.extend(maker_lines)
+        out.append("    return 0;")
+        out.append("}")
     # **常量池的静态声明** ✅ —— 放在 include 之后 ✅（必须在文件作用域 ✅）
     emit_pool_statics(out, consts)
+    # **类创建函数的前置声明** ✅ —— 模块体里要调用它们 ✅（定义在 init 之后 ✅）
+    for cls in (classes or []):
+        out.append("static int cratix_make_" + c_ident(cls["name"]) + "(void);")
+    if classes:
+        out.append("")
     # **实例结构体也必须在函数体之前** ✅ —— 属性快路径要按偏移解引用 ✅
     declarations = []
     for cls in (classes or []):
@@ -932,7 +993,7 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
     body_decls = []
     body_cleanup = []
     if module_gen is not None:
-        body_decls, body_lines, body_cleanup = module_body_parts(module_gen)
+        body_decls, body_lines, body_cleanup, body_marks = module_body_parts(module_gen)
         out.extend(body_decls)
     out.append("    cratix_globals = PyModule_GetDict(m);")
     out.append("    if (cratix_globals == NULL) return -1;")
@@ -1034,6 +1095,8 @@ class FunctionGen:
         self.finally_all: list = []
         # **生成器表达式的辅助函数** ✅（名字 -> 源码 ✅ —— 模块 init 里建出来 ✅）
         self.genexp_sources: dict = {}
+        # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
+        self.stmt_marks: list = []
         # **类信息** ✅：名字 -> {属性名: 槽位下标} ✅（属性快路径用 ✅）
         self.known_classes: dict = dict(known_classes or {})
         # 本方法所属的类 ✅（`self` 的静态类型 ✅）
