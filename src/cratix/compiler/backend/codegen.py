@@ -1337,11 +1337,30 @@ class FunctionGen:
         n_pos = len(names)
 
         self.emit("/* --- 参数绑定 --- */")
-        pass
         self.emit("PyObject *cratix_kw = NULL;")
         self.emit("PyObject *cratix_kwv = NULL;")
         if base:
             self.emit("PyObject *cratix_shifted = NULL;")
+        # **全位置参数 + 无默认值** ✅ -> **绑定快路径** ✅（#155 ✅）
+        # 注意：必须在**所有局部声明之后** ✅ —— 跳过一个带初始化的声明会留下未初始化变量 ✅（实测崩溃 ✅）。
+        # **方法描述符（base=1）不走快路径** ✅ —— self 的绑定在下面那段 if/else 里 ✅，
+        # 跳过去会让 `v_self` 保持 NULL ✅ -> 方法体里一访问属性就崩 ✅（实测 ✅）。
+        # **cells_only 的参数也不行** ✅（要写 cell 字典 ✅）。
+        need_fast = (not base and not vararg and not kwarg and not kwonly
+                     and not any(item is not None for item in defaults)
+                     and not any(item is not None for item in kwdefaults)
+                     and not (set(names) & set(self.cells_only)))
+        if need_fast:
+            n_required = len(names) - base
+            self.emit("if (kwargs == NULL && PyTuple_GET_SIZE(args) == " + str(n_required) + ") {")
+            for i, name in enumerate(names):
+                if base and i == 0:
+                    continue
+                var = self.local_var(name)
+                self.emit("    " + var + " = PyTuple_GET_ITEM(args, " + str(i - base) + ");")
+                self.emit("    Py_INCREF(" + var + ");")
+            self.emit("    goto cratix_bound_" + str(self.label_index) + ";")
+            self.emit("}")
         # **空 kwargs 不复制** ✅ —— 类方法的跳板是 `def tb(self, *args, **kwargs)` ✅，
         # 调它时 kwargs 永远是个 dict ✅（哪怕是空 dict ✅）→ 每次都 PyDict_Copy ✅（一次真分配 ✅）。
         self.emit("if (kwargs != NULL && PyDict_GET_SIZE(kwargs) > 0) {")
@@ -1439,6 +1458,11 @@ class FunctionGen:
             self.emit("    PyErr_SetString(PyExc_TypeError, \"cratix: unexpected keyword argument\");")
             self.emit("    goto cratix_error;")
             self.emit("}")
+        # **快路径的落点** ✅ —— 必须在**整个绑定之后** ✅（放前面会跳回绑定 ✅）
+        if need_fast:
+            self.emit("cratix_bound_" + str(self.label_index) + ": ;")
+            self.label_index += 1
+
     # ---------- 赋值 ----------
     def emit_value_into(self, dest: str, node) -> None:
         """把表达式的值放进 dest ✅（转移所有权 ✅）。"""
