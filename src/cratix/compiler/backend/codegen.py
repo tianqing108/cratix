@@ -1073,6 +1073,25 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            Py_DECREF(cratix_d);")
             out.append("        }")
             desc_index += 1
+        # **类体里的 import** ✅ —— exec 到临时命名空间 ✅，再把里面的名字挂成类属性 ✅
+        for imp_source in (cls.get("imports") or []):
+            out.append("        {")
+            out.append("            PyObject *cratix_imp_ns = PyDict_New();")
+            out.append("            if (cratix_imp_ns == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            PyObject *cratix_imp_res = PyRun_String(" + c_string(imp_source) + ", Py_file_input, cratix_globals, cratix_imp_ns);")
+            out.append("            if (cratix_imp_res == NULL) { Py_DECREF(cratix_imp_ns); Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_imp_res);")
+            out.append("            PyObject *cratix_imp_keys = PyDict_Keys(cratix_imp_ns);")
+            out.append("            if (cratix_imp_keys == NULL) { Py_DECREF(cratix_imp_ns); Py_DECREF(cls); return -1; }")
+            out.append("            for (Py_ssize_t k = 0; k < PyList_GET_SIZE(cratix_imp_keys); k++) {")
+            out.append("                PyObject *key = PyList_GET_ITEM(cratix_imp_keys, k);")
+            out.append("                PyObject *val = PyDict_GetItemWithError(cratix_imp_ns, key);")
+            out.append("                if (val == NULL) continue;")
+            out.append("                if (PyObject_SetAttr(cls, key, val) < 0) { Py_DECREF(cratix_imp_keys); Py_DECREF(cratix_imp_ns); Py_DECREF(cls); return -1; }")
+            out.append("            }")
+            out.append("            Py_DECREF(cratix_imp_keys);")
+            out.append("            Py_DECREF(cratix_imp_ns);")
+            out.append("        }")
         # **回退方法** ✅ —— 把源码 exec 进模块字典 ✅ -> 挂到类上 ✅ -> 删掉临时名 ✅
         for fb_name, fb_source, _fb_order in (cls.get("fallback_methods") or []):
             out.append("        {")

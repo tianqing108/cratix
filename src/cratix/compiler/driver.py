@@ -1024,6 +1024,8 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             "ann_only": [],
             # **回退方法** ✅（(名字, 源码, 行号) ✅ —— 建类时 exec 出来挂到类上 ✅）
             "fallback_methods": [],
+            # **类体里的 import** ✅（源码 ✅ —— 建类时 exec 并把名字挂成类属性 ✅）
+            "imports": [],
             # **类体里的类** ✅（(名字, 顺序, 源码) ✅）
             "inner_classes": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）
@@ -1121,6 +1123,13 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 if segment:
                     class_info["fallback_methods"].append((item.name, segment, item.lineno))
                 continue
+            elif isinstance(item, ast.ImportFrom):
+                # **类体里的 `from x import y`** ✅ —— 名字会变成**类属性** ✅。
+                # 记下源码 ✅，建类时 exec 到一个临时命名空间 ✅，再把里面所有名字挂到类上 ✅。
+                segment = _source_segment(source, item, dedent=True)
+                if segment:
+                    class_info["imports"].append(segment)
+                continue
             elif isinstance(item, ast.ClassDef):
                 # **类体里的类** ✅ —— 用**源码 exec** ✅（在 maker 里建完之后挂到外层类上 ✅）
                 inner_source = _source_segment(source, item, dedent=True)
@@ -1143,10 +1152,19 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     class_info["attrs"].append((item.target.id, builder.build_expr(item.value)))
                 else:
                     target = item.targets[0]
-                    if not isinstance(target, ast.Name):
+                    if isinstance(target, ast.Name):
+                        class_info["attrs"].append((target.id, builder.build_expr(item.value)))
+                    elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(
+                        item.value, (ast.Tuple, ast.List)
+                    ) and len(target.elts) == len(item.value.elts) and all(
+                        isinstance(elt, ast.Name) for elt in target.elts
+                    ):
+                        # **类体里的元组解包赋值** ✅（`a, b = 1, 2` ✅）—— 逐个变成类属性 ✅
+                        for name_node, value_node in zip(target.elts, item.value.elts):
+                            class_info["attrs"].append((name_node.id, builder.build_expr(value_node)))
+                    else:
                         class_broken = "类属性赋值目标不是简单名字"
                         break
-                    class_info["attrs"].append((target.id, builder.build_expr(item.value)))
         if class_broken:
             segment = _source_segment(source, stmt)
             if segment:

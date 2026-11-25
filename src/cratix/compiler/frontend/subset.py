@@ -53,15 +53,27 @@ def check_class(node: ast.ClassDef) -> None:
             # 所以**不该让整个类**回退 ✅（实测 78 个类 ✅）
             continue
         if isinstance(stmt, ast.Assign):
+            # **元组解包** ✅（`a, b = 1, 2` ✅ —— driver 会逐项变成类属性 ✅）
             for target in stmt.targets:
-                if not isinstance(target, ast.Name):
-                    raise Unsupported("类属性赋值目标不是简单名字")
+                if isinstance(target, ast.Name):
+                    continue
+                if (
+                    isinstance(target, (ast.Tuple, ast.List))
+                    and isinstance(stmt.value, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(stmt.value.elts)
+                    and all(isinstance(elt, ast.Name) for elt in target.elts)
+                ):
+                    continue
+                raise Unsupported("类属性赋值目标不是简单名字")
             continue
         if isinstance(stmt, (ast.AnnAssign,)):
             # 类属性 `x: int = 0` ✅（driver 会处理 ✅）
             continue
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
             continue  # 文档字符串 ✅
+        if isinstance(stmt, ast.ImportFrom):
+            # **类体里的 `from x import y`** ✅ —— 名字变成类属性 ✅（driver 处理 ✅）
+            continue
         if isinstance(stmt, ast.Pass):
             continue
         # **类体里的类** ✅ 已支持 ✅（源码 exec 后挂到外层类上 ✅）
