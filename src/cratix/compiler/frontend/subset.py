@@ -26,12 +26,41 @@ UNSUPPORTED_NODES = {
     ast.AsyncFor: "async for",
     ast.AsyncWith: "async with",
     ast.Await: "await",
-    ast.ClassDef: "类定义（M3 起支持）",
+    # 类定义单独校验 ✅（见 check_class ✅）
+
     ast.Match: "match 语句",
     ast.Nonlocal: "nonlocal 声明",
     ast.Delete: "del 语句",
     ast.ImportFrom: "from ... import（模块级导入单独处理 ✅）",
 }
+
+
+def check_class(node: ast.ClassDef) -> None:
+    """检查类定义 ✅（v1 只支持简单的 object 子类 ✅）。
+
+    **不支持** → 抛 Unsupported ✅（整个模块回退 .pyc ✅ —— 类是模块级结构 ✅）。
+    """
+    for base in node.bases:
+        if isinstance(base, ast.Name) and base.id == "object":
+            continue
+        raise Unsupported("继承非 object 基类（" + type(base).__name__ + "）")
+    if node.keywords:
+        raise Unsupported("类定义带关键字参数（metaclass 等）")
+    if node.decorator_list:
+        raise Unsupported("带装饰器的类")
+    for stmt in node.body:
+        if isinstance(stmt, ast.FunctionDef):
+            continue
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if not isinstance(target, ast.Name):
+                    raise Unsupported("类属性赋值目标不是简单名字")
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue  # 文档字符串 ✅
+        if isinstance(stmt, ast.Pass):
+            continue
+        raise Unsupported("类体语句：" + type(stmt).__name__)
 
 
 def check_function(node: ast.FunctionDef, scope) -> None:

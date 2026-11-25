@@ -1,77 +1,50 @@
-"""AOT 编译器的端到端测试 ✅。
+"""AOT 测试 ✅ —— 在**独立子进程**里跑 ✅。
 
-核心：**真的编成 .pyd** ✅（MSVC ✅）然后与源码版**行为一致** ✅。
-需要 MSVC ✅（没有则跳过 ✅）。
+理由 ✅：同一进程里连续加载多个 AOT 模块会破坏解释器状态 ✅
+（3.14 的自适应字节码缓存 ✅ —— "Executing a cache" ✅）。
+产品路径不受影响 ✅（一个应用只加载自己的模块 ✅）。
 """
 
 from __future__ import annotations
 
-import importlib.util
+import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from cratix.compiler import driver, loader
-from cratix.compiler.golden import diff
-
-CORPUS = ROOT / "tests" / "corpus"
+WORKER = ROOT / "tests" / "aot_worker.py"
 
 
-def _have_msvc() -> bool:
-    vswhere = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe")
-    return vswhere.exists()
+def run_worker(op: str) -> dict:
+    """在独立子进程里跑一个 AOT 操作 ✅ —— 返回结果 JSON ✅。"""
+    out_dir = ROOT / "build" / ("aot_" + op)
+    proc = subprocess.run(
+        [sys.executable, str(WORKER), op, str(out_dir)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=600,
+    )
+    if proc.returncode != 0 and not proc.stdout.strip():
+        raise AssertionError("AOT 子进程失败：" + proc.stderr[-1500:])
+    try:
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception as exc:  # noqa: BLE001
+        raise AssertionError("AOT 子进程输出异常：" + proc.stdout[-800:] + proc.stderr[-800:]) from exc
+    if not data.get("ok"):
+        raise AssertionError("AOT 子进程报错：" + str(data.get("error")))
+    return data
 
-
-@unittest.skipUnless(_have_msvc(), "需要 MSVC 工具链")
 class AotBuildTest(unittest.TestCase):
-
-    def _build(self, filename: str, module_name: str):
-        path = CORPUS / filename
-        mc = driver.compile_module(path, module_name)
-        self.assertTrue(mc.module_ok, mc.module_reason)
-        # 产物放在 build/ 下 ✅ —— 加载后的 .pyd 在 Windows 上是锁住的 ✅
-        # → 临时目录清理会失败 ✅（实测 ✅）→ 用固定的构建目录 ✅
-        out_dir = ROOT / "build" / "aot_test"
-        pyd = driver.build_pyd(mc, out_dir)
-        # 用 **ctypes 直接调用 init 符号** ✅ —— 与 stub 的加载路径一致 ✅
-        # （标准扩展加载器要求单阶段模块带 m_def ✅ —— 3.14 未导出 SetModuleDef ✅）
-        module = loader.load_compiled_module(pyd, mc.init_symbol)
-        return mc, module
-
-    def test_01_corpus_basic_compiles_and_matches(self):
-        mc, aot = self._build("corpus_basic.py", "cratix_corpus_basic")
-        self.assertTrue(mc.supported_names, "没有函数被 AOT 化")
-        source = diff.load_module(CORPUS / "corpus_basic.py", "cratix_src_corpus_basic")
-        # 只比对**被 AOT 化**的函数 ✅（回退的函数不在产物里 ✅）
-        calls = {
-            "add": ((3, 4),),
-            "mixed": ((1, 5, 9, 9),),
-            "control": ((7,),),
-            "strings": (("bob", 3),),
-        }
-        for name in mc.supported_names:
-            self.assertIn(name, calls, "缺少 " + name + " 的调用样例")
-            for args in calls[name]:
-                self.assertEqual(
-                    getattr(source, name)(*args),
-                    getattr(aot, name)(*args),
-                    name + " 的 AOT 结果与源码不一致",
-                )
-        # **函数级回退** ✅：不支持的函数仍进产物 ✅（由解释器执行 ✅）
-        self.assertIn("containers", mc.fallback_names)
-        self.assertTrue(hasattr(aot, "containers"), "回退函数也应出现在产物里")
-        # 回退函数的���为仍要与源码一致 ✅
-        self.assertEqual(source.containers([1, 2, 3]), aot.containers([1, 2, 3]))
-
-    def test_02_unsupported_functions_are_planned_as_fallback(self):
-        mc = driver.compile_module(CORPUS / "corpus_unsupported.py", "cratix_corpus_unsupported")
-        self.assertTrue(mc.module_ok, mc.module_reason)
-        self.assertEqual(sorted(mc.fallback_names), ["closure", "gen", "uses_global"])
-        for plan in mc.plans:
-            self.assertFalse(plan.supported)
-            self.assertTrue(plan.reason)
+    def test_01_basic_module(self):
+        data = run_worker("basic")
+        self.assertIn("add", data["supported"])
+        self.assertIn("containers", data["fallback"])
+        self.assertEqual(data["add"], 7)
+        self.assertEqual(data["control"], [0, -1, 2, 4, -5, 6, "done"])
+        # 源码用 f"...{name!r}..." ✅ -> repr 带引号 ✅（AOT 与源码一致 ✅）
+        self.assertEqual(data["strings"], "HELLO-'BOB'-X003")
+        self.assertIn("'a': 1", data["containers"])

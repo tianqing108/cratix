@@ -19,7 +19,7 @@ from . import builder
 from .backend import codegen
 from .backend.runtime import HEADER_NAME, RUNTIME_H
 from .frontend.scope import Scope, analyze_function
-from .frontend.subset import Unsupported, check_function
+from .frontend.subset import Unsupported, check_class, check_function
 
 
 @dataclass
@@ -37,6 +37,7 @@ class ModuleCompile:
     functions: list = field(default_factory=list)
     plans: list = field(default_factory=list)
     fallback_code: dict = field(default_factory=dict)
+    classes: list = field(default_factory=list)
     module_ok: bool = True
     module_reason: str = ""
     key_names: list = field(default_factory=list)
@@ -52,6 +53,22 @@ class ModuleCompile:
 
 
 
+
+
+
+def ir_node_params(names, defaults, params):
+    """复制参数表并**前置 self** ✅（默认值右对齐 ✅ → 前面补 None ✅）。"""
+    from . import ir
+
+    return ir.node(
+        "params",
+        names=names,
+        defaults=defaults,
+        kwdefaults=list(params.get("kwdefaults", [])),
+        kwonly=list(params.get("kwonly", [])),
+        vararg=params.get("vararg"),
+        kwarg=params.get("kwarg"),
+    )
 
 def _module_code_objects(source: str, filename: str) -> dict:
     """编译整个模块 ✅ 并取出顶层函数的 code object ✅（marshal 后的字节 ✅）。
@@ -108,10 +125,6 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
     module_stmts = []
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if isinstance(stmt, ast.ClassDef):
-                result.module_ok = False
-                result.module_reason = "模块级类定义（v1 不支持）"
-                return result
             continue
         if not _module_level_supported(stmt):
             result.module_ok = False
@@ -177,6 +190,60 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
         for name in list(gen.params.get("names", [])) + list(gen.params.get("kwonly", [])):
             key_names.append(name)
 
+    # --- 类 ✅（v1：简单 object 子类 ✅）---
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.ClassDef):
+            continue
+        try:
+            check_class(stmt)
+        except Unsupported as exc:
+            result.module_ok = False
+            result.module_reason = exc.reason
+            return result
+        class_info = {"name": stmt.name, "methods": [], "attrs": []}
+        for item in stmt.body:
+            if isinstance(item, ast.FunctionDef):
+                method_scope = analyze_function(item, module_globals)
+                try:
+                    check_function(item, method_scope)
+                    built = builder.build_stmt(item)
+                    params = built.get("params")
+                    # **self 本来就是 AST 里的普通参数** ✅ —— 不要再前置 ✅
+                    # （前置过一次 ✅ → 参数表变成 ["self","self","x","y"] ✅ → 绑定全错 ✅）
+                    self_params = params
+                    # **C 函数名带类名** ✅ —— 不同类的同名方法不会撞符号 ✅
+                    gen = codegen.FunctionGen(
+                        stmt.name + "." + item.name,
+                        self_params,
+                        built.get("body", []),
+                        method_scope,
+                    )
+                    gen.emit_binding()
+                    for body_stmt in built.get("body", []):
+                        gen.emit_stmt(body_stmt)
+                except Unsupported as exc:
+                    result.plans.append(FunctionPlan(item.name, False, exc.reason))
+                    segment = None
+                    try:
+                        segment = ast.get_source_segment(source, item)
+                    except Exception:  # noqa: BLE001
+                        segment = None
+                    if segment:
+                        result.fallback_code[item.name] = {
+                            "source": segment,
+                            "filename": str(path),
+                        }
+                    continue
+                # **类方法不放进模块级函数表** ✅（否则会重复生成 ✅ + 出现在模块字典里 ✅）
+                class_info["methods"].append((item.name, gen))
+                # **方法参数也要 intern 键** ✅（绑定代码要用 ✅）
+                for pname in list(self_params.get("names", [])) + list(self_params.get("kwonly", [])):
+                    key_names.append(pname)
+                result.plans.append(FunctionPlan(item.name, True, ""))
+            elif isinstance(item, ast.Assign):
+                class_info["attrs"].append((item.targets[0].id, builder.build_expr(item.value)))
+        result.classes.append(class_info)
+
     # --- 模块级 body ✅ ---
     module_gen = None
     if module_stmts:
@@ -203,6 +270,7 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
         module_gen,
         None,
         result.fallback_code,
+        result.classes,
     )
     return result
 

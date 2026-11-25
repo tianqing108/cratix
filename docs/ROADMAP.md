@@ -7,7 +7,7 @@
 | M0 骨架 + vendor | 仓库结构、vendor 打包半边并去业务化、统一改名、CLI deps/build | 示例工程产出 onefile exe 并运行成功；两次构建 sha256 一致；构建链无第三方编译器 | 1 周 | ✅ 完成 |
 | M1 运行期 + 双形态 | 纯 Python 引导模块(.pyc 兜底)、stub 改造 D1–D8、onedir 目录版 | onefile 零落盘；onedir 可用；verify --no-console 通过 | 1.5 周 | ✅ 完成 |
 | M2 AOT 内核 | IR / 作用域 / 子集判定 / 黄金模型 / C 后端 / MSVC 驱动 / 接入打包链 / 双进程探针 / 函数级回退 | 编译产物与源码行为等价；产物里能加载 AOT 模块 | 4 周 | ✅ 完成 |
-| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | ⬜ 未开始 |
+| M3 子集扩展与语义对齐 | 类/try-except/with/推导式/装饰器/property/元数据保真 | tests/corpus 全绿；无静默语义偏差 | 3 周 | 🟡 **类支持完成 ✅**；try-except/with/推导式待做 |
 | M4 增量/缓存/可复现/报告 | 增量缓存、report.json、可复现性检查表 | 热构建 ≤5s；两次构建 sha256 一致 | 1.5 周 | 🟡 report.json 与可复现性已达成；增量缓存未做 |
 | M5 性能与覆盖率 | 闭包 cell、slot 化属性、全局缓存、常量池、覆盖率提升 | 基准 ≥1.5×；启动不劣化 >15% | 2–3 周 | ⬜ 未开始 |
 | M6 跨平台预留 | 四接口抽象 + Linux/macOS 占位 | Windows 实现完全走抽象接口 | 1 周 | ⬜ 未开始 |
@@ -68,10 +68,17 @@
   于是生成器 / global 写入 / 闭包等构造都能保留 ✅，模块整体不必回退 ✅。
 - **31 项测试全绿**（24 单元 + 7 端到端 ✅）。
 
+## M3 追加：类支持 ✅
+
+- 类 = `PyType_FromSpec` ✅（自定义 `tp_new` ✅ + `MANAGED_DICT` ✅）；
+- 方法 = 原生函数 ✅ + 解释执行的薄跳板 ✅（普通 PyCFunction 不绑定 self ✅）；
+- 类属性 ✅ / 实例属性 ✅ / `isinstance` ✅ 均可用 ✅；
+- **33 项测试全绿** ✅（25 单元 + 8 端到端 ✅）。
+
 ## 下一步
 
-1. **M3 子集扩展** ✅：类 / try-except / with / 推导式 / 装饰器 / property ✅（类需要新的代码生成路径 ✅）；
-2. **引导模块原生化** ✅：自研编译器产出 `runtime/cratix_bootstrap.pyd` ✅（依赖类支持 ✅）；
+1. **M3 继续** ✅：try-except / with / 推导式 / 装饰器 / property ✅；
+2. **引导模块原生化** ✅：自研编译器产出 `runtime/cratix_bootstrap.pyd` ✅（类支持已就绪 ✅）；
 3. **增量编译** ✅：按模块指纹复用 .pyd ✅（M4 ✅）。
 
 详细设计见 [PLAN.md](PLAN.md)。

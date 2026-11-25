@@ -175,7 +175,7 @@ def module_body_parts(gen: FunctionGen):
 
 def generate_module_single_phase(module_name: str, init_symbol: str, functions: list,
                                  key_names: list, module_gen=None, alias_init: str | None = None,
-                                 fallback_code: dict | None = None) -> str:
+                                 fallback_code: dict | None = None, classes: list | None = None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -190,6 +190,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("/* 由 cratix AOT 编译器生成 —— 请勿手改 ✅ */")
     out.append("#include <Python.h>")
     out.append("#include " + q + "cratix_runtime.h" + q)
+    pass
+
 
     out.append("")
     out.append("static PyObject *cratix_globals = NULL;")
@@ -199,7 +201,12 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     for key in sorted(set(key_names)):
         out.append("static PyObject *cratix_key_" + c_ident(key) + " = NULL;")
     out.append("")
-    for gen in functions:
+    # **代码生成覆盖所有函数** ✅（含类方法 ✅ —— 它们的 C 代码要有 ✅）
+    all_gens = list(functions)
+    for cls in (classes or []):
+        for _method_name, gen in cls.get("methods", []):
+            all_gens.append(gen)
+    for gen in all_gens:
         out.append(generate_function(gen))
         out.append("")
     out.append("static PyMethodDef cratix_methods[] = {")
@@ -235,6 +242,57 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
         out.append("    return -1;")
     out.append("}")
     out.append("")
+    # --- ��� ✅：每类一个方法表 ✅（方法名带类名前缀 ✅ —— 避免同名冲突 ✅）---
+    classes = classes or []
+    for cls in classes:
+        # **tp_new** ✅：分配实例 ✅ 并调用 __init__ ✅（把 self 放第一个 ✅）
+        out.append("static PyObject *cratix_new_" + c_ident(cls["name"]) + "(PyTypeObject *type, PyObject *args, PyObject *kwargs) {")
+        out.append("    PyObject *self = type->tp_alloc(type, 0);")
+        out.append("    PyObject *init; PyObject *callargs; PyObject *res; Py_ssize_t n, i;")
+        out.append("    if (self == NULL) return NULL;")
+        out.append("    init = PyObject_GetAttrString((PyObject *)type, \"__init__\");")
+        out.append("    if (init == NULL) { Py_DECREF(self); return NULL; }")
+        out.append("    n = PyTuple_GET_SIZE(args);")
+        out.append("    callargs = PyTuple_New(n + 1);")
+        out.append("    if (callargs == NULL) { Py_DECREF(init); Py_DECREF(self); return NULL; }")
+        out.append("    Py_INCREF(self); PyTuple_SET_ITEM(callargs, 0, self);")
+        out.append("    for (i = 0; i < n; i++) { PyObject *v = PyTuple_GET_ITEM(args, i); Py_INCREF(v); PyTuple_SET_ITEM(callargs, i + 1, v); }")
+        out.append("    res = PyObject_Call(init, callargs, kwargs);")
+        out.append("    Py_DECREF(callargs); Py_DECREF(init);")
+        out.append("    if (res == NULL) { Py_DECREF(self); return NULL; }")
+        out.append("    Py_DECREF(res);")
+        out.append("    return self;")
+        out.append("}")
+        out.append("")
+        out.append("static PyType_Slot cratix_cls_" + c_ident(cls["name"]) + "_slots[] = {")
+        out.append("    {Py_tp_new, (void *)cratix_new_" + c_ident(cls["name"]) + "},")
+        out.append("    {0, NULL}")
+        out.append("};")
+        out.append("")
+        out.append("static PyType_Spec cratix_cls_" + c_ident(cls["name"]) + "_spec = {")
+        out.append("    " + q + module_name + "." + cls["name"] + q + ",")
+        out.append("    sizeof(PyObject), 0,")
+        out.append("    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_MANAGED_DICT,")
+        out.append("    cratix_cls_" + c_ident(cls["name"]) + "_slots")
+        out.append("};")
+        out.append("")
+        out.append("static PyMethodDef cratix_cls_" + c_ident(cls["name"]) + "_methods[] = {")
+        for method_name, _gen in cls.get("methods", []):
+            cast = "(PyCFunction)(void(*)(void))cratix_fn_" + c_ident(cls["name"] + "." + method_name)
+            # **私有名** ✅ —— 原生方法放在模块字典的私有名下 ✅
+            out.append("    {" + q + "_cratix_" + method_name + q + ", " + cast + ", METH_VARARGS | METH_KEYWORDS, NULL},")
+        out.append("    {NULL, NULL, 0, NULL}")
+        out.append("};")
+        out.append("")
+        # **跳板源码** ✅：把 self 传给原生方法 ✅（普通 PyCFunction ✅ 不绑定 self ✅）
+        for method_name, _gen in cls.get("methods", []):
+            tb_name = "_cratix_tb_" + method_name
+            src = (
+                "def " + tb_name + "(self, *args, **kwargs):" + chr(10)
+                + "    return _cratix_" + method_name + "(self, *args, **kwargs)" + chr(10)
+            )
+            out.append("static const char *cratix_tb_" + c_ident(cls["name"] + "." + method_name) + " = " + c_string(src) + ";")
+        out.append("")
     out.append("static struct PyModuleDef cratix_module = {")
     out.append("    PyModuleDef_HEAD_INIT,")
     out.append("    " + q + module_name + q + ",")
@@ -283,6 +341,66 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **不设 m_def** ✅ —— `PyModule_SetModuleDef` 在 3.14 **没有导出** ✅（实测 ✅）；
     # 我们也不需要 ✅ —— 引导模块对 exec_done 的记录**不会**调 exec_def ✅。
     out.append("    if (cratix_run_body(m) < 0) { Py_DECREF(m); return NULL; }")
+    # --- 类 ✅：用堆类型创建 ✅（type(name, (object,), ns) ✅）---
+    for cls in classes:
+        table = "cratix_cls_" + c_ident(cls["name"]) + "_methods"
+        out.append("    {")
+        pass
+        pass
+
+        # 方法**在建类之后**挂上去 ✅ —— 3.14 的
+        # `PyDescr_NewMethod(PyTypeObject *, PyMethodDef *)` ✅ 需要**类** ✅。
+        # 用**方法描述符** ✅ → 调用时绑定 self ✅（普通 PyCFunction ✅ 不绑定 ✅）。
+        pass
+
+
+        for idx, (method_name, _gen) in enumerate(cls.get("methods", [])):
+            out.append("        {")
+            out.append("            PyObject *fn = PyCFunction_NewEx(&" + table + "[" + str(idx) + "], NULL, NULL);")
+            out.append("            if (fn == NULL) { Py_DECREF(m); return NULL; }")
+            out.append("            if (PyDict_SetItemString(cratix_globals, " + q + "_cratix_" + method_name + q + ", fn) < 0) { Py_DECREF(fn); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(fn);")
+            out.append("        }")
+        for method_name, _gen in cls.get("methods", []):
+            tb = "_cratix_tb_" + method_name
+            out.append("        {")
+            out.append("            PyObject *t = PyRun_String(cratix_tb_" + c_ident(cls["name"] + "." + method_name) + ", Py_file_input, cratix_globals, cratix_globals);")
+            out.append("            if (t == NULL) { Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(t);")
+            out.append("        }")
+        # **建类** ✅（3.14 的 PyType_Spec **没有 dict 成员** ✅ —— 只能建完再挂 ✅）
+        out.append("        PyType_Spec spec = cratix_cls_" + c_ident(cls["name"]) + "_spec;")
+        out.append("        PyObject *cls = PyType_FromSpec(&spec);")
+        out.append("        if (cls == NULL) { Py_DECREF(m); return NULL; }")
+        out.append("        PyObject *mod_name = PyUnicode_FromString(" + q + module_name + q + ");")
+        out.append("        if (mod_name == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+        out.append("        PyObject_SetAttrString(cls, \"__module__\", mod_name);")
+        out.append("        Py_DECREF(mod_name);")
+        # **挂方法** ✅（跳板 ✅ —— 普通函数放在类字典里 ✅ → 调用时自动绑定 self ✅）
+        for method_name, _gen in cls.get("methods", []):
+            tb = "_cratix_tb_" + method_name
+            out.append("        {")
+            out.append("            PyObject *tbv = PyDict_GetItemString(cratix_globals, " + q + tb + q + ");")
+            out.append("            if (tbv == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            Py_INCREF(tbv);")
+            out.append("            PyObject *mn = PyUnicode_FromString(" + q + method_name + q + ");")
+            out.append("            if (mn == NULL) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            PyObject_SetAttrString(tbv, \"__name__\", mn);")
+            out.append("            Py_DECREF(mn);")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + method_name + q + ", tbv) < 0) { Py_DECREF(tbv); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(tbv);")
+            out.append("        }")
+        # **类属性** ✅
+        for attr_name, attr_ir in cls.get("attrs", []):
+            out.append("        {")
+            out.append("            PyObject *av = " + const_expr(attr_ir.get("value")) + ";")
+            out.append("            if (av == NULL) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + attr_name + q + ", av) < 0) { Py_DECREF(av); Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+            out.append("            Py_DECREF(av);")
+            out.append("        }")
+        out.append("        if (PyDict_SetItemString(cratix_globals, " + q + cls["name"] + q + ", cls) < 0) { Py_DECREF(cls); Py_DECREF(m); return NULL; }")
+        out.append("        Py_DECREF(cls);")
+        out.append("    }")
     # --- 函数级回退 ✅：从内嵌字节码重建函数 ✅（globals = 模块字典 ✅）---
     if fallback_code:
         out.append("    for (int i = 0; cratix_fallbacks[i].name != NULL; i++) {")
@@ -313,6 +431,8 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
     out.append("/* 由 cratix AOT 编译器生成 —— 请勿手改 ✅ */")
     out.append("#include <Python.h>")
     out.append("#include " + q + "cratix_runtime.h" + q)
+    pass
+
 
     out.append("")
     out.append("static PyObject *cratix_globals = NULL;")
@@ -322,7 +442,12 @@ def generate_module(module_name: str, init_symbol: str, functions: list, key_nam
     for key in sorted(set(key_names)):
         out.append("static PyObject *cratix_key_" + c_ident(key) + " = NULL;")
     out.append("")
-    for gen in functions:
+    # **代码生成覆盖所有函数** ✅（含类方法 ✅ —— 它们的 C 代码要有 ✅）
+    all_gens = list(functions)
+    for cls in (classes or []):
+        for _method_name, gen in cls.get("methods", []):
+            all_gens.append(gen)
+    for gen in all_gens:
         out.append(generate_function(gen))
         out.append("")
     out.append("static PyMethodDef cratix_methods[] = {")
@@ -445,6 +570,7 @@ class FunctionGen:
         n_pos = len(names)
 
         self.emit("/* --- 参数绑定 --- */")
+        pass
         self.emit("PyObject *cratix_kw = NULL;")
         self.emit("PyObject *cratix_kwv = NULL;")
         self.emit("if (kwargs != NULL) {")
