@@ -1142,7 +1142,7 @@ class FunctionGen:
                  class_methods=None, self_attr_writes=None, method_mode=False,
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
                  cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
-                 genexp_captures=None):
+                 genexp_captures=None, deleted_locals=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -1188,6 +1188,8 @@ class FunctionGen:
         self.genexp_sources: dict = {}
         # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
         self.needs_cur_exc = False
+        # **会被 `del` 的局部名** ✅ —— 读它们时要检查 NULL ✅（UnboundLocalError ✅）
+        self.deleted_locals = set(deleted_locals or ())
         # **match 语句的标签编号** ✅
         self.match_index = 0
         # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
@@ -2207,7 +2209,10 @@ class FunctionGen:
             # **`del name`** ✅ —— 只支持**模块全局** ✅（局部删除要 UnboundLocal 语义 ✅ —— 暂不支持 ✅）
             for name in node.get("names", []):
                 if name in self.scope.locals_:
-                    raise Unsupported("del 局部变量")
+                    # **`del 局部变量`** ✅ —— 清空 + 之后读到就 UnboundLocalError ✅
+                    var = self.local_var(name)
+                    self.emit("Py_CLEAR(" + var + ");")
+                    continue
                 self.emit("if (PyDict_DelItemString(cratix_globals, " + c_string(name) + ") < 0) goto cratix_error;")
             # **`del obj.attr`** ✅ / **`del d[k]`** ✅
             for target in node.get("targets", []):
@@ -2240,8 +2245,12 @@ class FunctionGen:
                     self.emit("PyTuple_SET_ITEM(" + args + ", " + str(index) + ", " + value + ");")
                 result_tmp = self.new_tmp()
                 self.emit(result_tmp + " = PyObject_Call(" + fn_copy + ", " + args + ", NULL);")
+                # **手工 DECREF 之后必须置 NULL** ✅ —— 否则函数出口的清理会**再 DECREF 一次** ✅
+                # （实测：模块析构时访问违例 ✅ —— 双重释放 ✅）
                 self.emit("Py_DECREF(" + args + ");")
+                self.emit(args + " = NULL;")
                 self.emit("Py_DECREF(" + fn_copy + ");")
+                self.emit(fn_copy + " = NULL;")
                 self.emit("if (" + result_tmp + " == NULL) goto cratix_error;")
                 var = self.local_var(factory["class_name"])
                 self.emit("Py_XDECREF(" + var + ");")
@@ -2482,6 +2491,12 @@ class FunctionGen:
                 return t
             if name in self.scope.locals_:
                 var = self.local_var(name)
+                if name in self.deleted_locals:
+                    # **可能被 `del` 过** ✅ -> 读之前检查 ✅（与 CPython 一致 ✅）
+                    self.emit("if (" + var + " == NULL) {")
+                    self.emit("    PyErr_Format(PyExc_UnboundLocalError, \"cannot access local variable '%s' where it is not associated with a value\", " + c_string(name) + ");")
+                    self.emit("    goto cratix_error;")
+                    self.emit("}")
                 self.emit(t + " = " + var + ";")
                 self.emit("Py_XINCREF(" + t + ");")
             else:

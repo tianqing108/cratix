@@ -273,6 +273,18 @@ def _module_level_supported(stmt) -> bool:
     return False
 
 
+def _deleted_locals(func_node) -> set:
+    """**会被 `del` 的局部名** ✅（读它们时要检查 NULL ✅）。只算本层的 `del` ✅。"""
+    names: set = set()
+    for child in ast.walk(func_node):
+        if not isinstance(child, ast.Delete):
+            continue
+        for target in child.targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+    return names
+
+
 def _nested_defs(func_node) -> list:
     """收集 `func_node` 里**直接属于它**的嵌套 def ✅（可以夹在 if/for/with/try 里 ✅，
     但不进更深一层的 def/lambda/class ✅ —— 那些归它们自己的父函数 ✅）。"""
@@ -380,9 +392,9 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             }
             captured = sorted(used & (scope.locals_ - {"__class__"}))
             if captured:
-                # **暂时回退** ✅ —— 工厂函数方案能跑出正确结果 ✅，
-                # 但**模块析构时会崩**（访问违例 ✅，TODO 已记进 pitfalls ✅）。
-                # 崩溃比"回退"糟得多 ✅ -> 先保守：这个函数整函数回退 ✅（语义正确 ✅）。
+                # **回退** ✅ —— 工厂方案的结果是对的 ✅，但**模块析构仍会崩** ✅
+                # （双 DECREF 修掉了 ✅，还剩别的引用问题 ✅ —— TODO 见 pitfalls #121 ✅）。
+                # 崩溃比回退糟得多 ✅ -> 整函数回退 ✅（语义正确 ✅）。
                 return
         result.inline_class_sources[key] = segment
 
@@ -647,6 +659,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 package=module_name.rpartition(".")[0],
             )
             inner_gen.inline_class_sources = dict(result.inline_class_sources)
+            inner_gen.class_factories = dict(result.class_factories)
             inner_gen.emit_binding()
             inner_gen.emit_cells_init()
             for inner_stmt in inner_built["body"]:
@@ -690,6 +703,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 package=module_name.rpartition(".")[0],
             )
             lam_gen.inline_class_sources = dict(result.inline_class_sources)
+            lam_gen.class_factories = dict(result.class_factories)
             lam_gen.emit_binding()
             lam_gen.emit_cells_init()
             for lam_stmt in built_lambda["body"]:
@@ -753,6 +767,8 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             )
             # **函数体里的类** ✅ 也要能查到源码 ✅
             gen.inline_class_sources = dict(result.inline_class_sources)
+            gen.class_factories = dict(result.class_factories)
+            gen.deleted_locals = _deleted_locals(stmt)
             gen.emit_binding()
             gen.emit_cells_init()
             for body_stmt in built.get("body", []):
@@ -897,6 +913,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                         package=module_name.rpartition(".")[0],
                     )
                     gen.inline_class_sources = dict(result.inline_class_sources)
+                    gen.class_factories = dict(result.class_factories)
                     gen.emit_binding()
                     gen.emit_cells_init()
                     for body_stmt in built.get("body", []):
