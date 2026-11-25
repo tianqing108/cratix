@@ -142,6 +142,13 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：裸 raise / 类体里的类 ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 107 | `except ValueError: raise`（裸 raise）只能整函数回退 ✅ | 重抛需要"当前异常" ✅，而它只在分派的局部三元组里 ✅（`cratix_et/ev/etb` ✅） | 每函数一个 `cratix_cur_exc` ✅：分派时记下 ✅、handler 结束恢复 ✅；重抛用 `PyErr_SetRaisedException(Py_NewRef(exc))` ✅（保留 traceback ✅） |
+| 108 | 类体里定义的类让整个类回退 ✅ | 类体是"静态收集"的 ✅（只认方法 / 简单赋值 ✅） | 内层类的**源码 exec** 到模块字典 ✅ -> `SetAttr` 挂到外层类 ✅ -> 删掉临时名 ✅ |
+
 ## 追加：多基类 / 海象 / del / hasattr ✅
 
 | # | 现象 | 根因 | 修法 |

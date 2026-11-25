@@ -710,6 +710,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             "bases": [builder.build_expr(base) for base in stmt.bases],
             "doc": _doc_of(stmt),
             "descriptor_methods": [],
+            # **类体里的类** ✅（(名字, 顺序, 源码) ✅）
+            "inner_classes": [],
             # **属性槽位** ✅（`self.X = ...` 写过的名字 ✅ -> 实例结构体里的字段 ✅）
             "slots": sorted(class_slots_map.get(stmt.name, {})),
             "methods": [],
@@ -790,6 +792,12 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     key_names.append(pname)
                 key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
+            elif isinstance(item, ast.ClassDef):
+                # **类体里的类** ✅ —— 用**源码 exec** ✅（在 maker 里建完之后挂到外层类上 ✅）
+                inner_source = _source_segment(source, item, dedent=True)
+                if not inner_source:
+                    raise Unsupported("类体里的类（取不到源码）")
+                class_info["inner_classes"].append((item.name, item.lineno, inner_source))
             elif isinstance(item, (ast.Assign, ast.AnnAssign)):
                 # **类属性** ✅（含带注解的 `x: int = 0` ✅ —— 真实代码里到处是 ✅）
                 if isinstance(item, ast.AnnAssign):

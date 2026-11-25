@@ -358,6 +358,8 @@ def generate_function(gen: FunctionGen) -> str:
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    if getattr(gen, "needs_cur_exc", False):
+        decls.append("    PyObject *cratix_cur_exc = NULL;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
     decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS + 1) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
@@ -412,6 +414,8 @@ def module_body_parts(gen: FunctionGen):
         decls.append("    PyObject *" + name + " = NULL;")
     for name in gen.int_helpers:
         decls.append("    int " + name + " = 0;")
+    if getattr(gen, "needs_cur_exc", False):
+        decls.append("    PyObject *cratix_cur_exc = NULL;")
     # **向量调用的暂存** ✅（每个函数一份 ✅ —— 避免重复声明 ✅ ✅）
     decls.append("    PyObject *cratix_vargs[" + str(MAX_VECTORCALL_ARGS + 1) + "];")
     decls.append("    PyObject *cratix_kwnames = NULL;")
@@ -945,6 +949,19 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("            Py_DECREF(cratix_d);")
             out.append("        }")
             desc_index += 1
+        # **类体里的类** ✅ —— 源码 exec 到模块字典 ✅，再挂到外层类上 ✅，最后把模块字典里的临时名删掉 ✅
+        for inner_name, _order, inner_source in (cls.get("inner_classes") or []):
+            out.append("        {")
+            out.append("            PyObject *cratix_inner_src = PyRun_String(" + c_string(inner_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+            out.append("            if (cratix_inner_src == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_inner_src);")
+            out.append("            PyObject *cratix_inner = PyDict_GetItemString(cratix_globals, " + q + inner_name + q + ");")
+            out.append("            if (cratix_inner == NULL) { Py_DECREF(cls); return -1; }")
+            out.append("            Py_INCREF(cratix_inner);")
+            out.append("            if (PyObject_SetAttrString(cls, " + q + inner_name + q + ", cratix_inner) < 0) { Py_DECREF(cratix_inner); Py_DECREF(cls); return -1; }")
+            out.append("            Py_DECREF(cratix_inner);")
+            out.append("            if (PyDict_DelItemString(cratix_globals, " + q + inner_name + q + ") < 0) { PyErr_Clear(); }")
+            out.append("        }")
         # **类装饰器** ✅：建类之后按逆序应用 ✅（@a @b class C -> a(b(C)) ✅）
         for segment in reversed(cls.get("decorators") or []):
             out.append("        {")
@@ -1158,6 +1175,8 @@ class FunctionGen:
         self.finally_all: list = []
         # **生成器表达式的辅助函数** ✅（名字 -> 源码 ✅ —— 模块 init 里建出来 ✅）
         self.genexp_sources: dict = {}
+        # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
+        self.needs_cur_exc = False
         # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
         self.stmt_marks: list = []
         # **类信息** ✅：名字 -> {属性名: 槽位下标} ✅（属性快路径用 ✅）
@@ -1572,6 +1591,10 @@ class FunctionGen:
         self.emit("        int cratix_m = -1;")
         self.emit("        PyErr_Fetch(&cratix_et, &cratix_ev, &cratix_etb);")
         self.emit("        PyErr_NormalizeException(&cratix_et, &cratix_ev, &cratix_etb);")
+        if self.needs_cur_exc:
+            # **"当前异常"= 这次捕获到的异常** ✅（裸 raise 要重抛它 ✅）
+            self.emit("        PyObject *cratix_prev_exc = cratix_cur_exc;")
+            self.emit("        cratix_cur_exc = cratix_ev != NULL ? Py_NewRef(cratix_ev) : NULL;")
         self.emit("        switch (cratix_try_idx[cratix_ti]) {")
         for try_id, block in enumerate(self.try_blocks):
             handlers = block["handlers"]
@@ -1599,8 +1622,13 @@ class FunctionGen:
             self.emit("                cratix_et = NULL; cratix_ev = NULL; cratix_etb = NULL;")
             for j in range(len(handlers)):
                 self.emit("                if (cratix_m == " + str(j) + ") {")
+                # **裸 raise 要用"当前异常"** ✅ —— 进 handler 前保存 ✅、出 handler 后恢复 ✅
+                # **"当前异常"在分派开始时设好** ✅（见下 ✅ —— 这里不用再设 ✅）
                 for line in block["bodies"][j]:
                     self.emit(line)
+                if self.needs_cur_exc:
+                    self.emit("                    Py_XDECREF(cratix_cur_exc);")
+                    self.emit("                    cratix_cur_exc = cratix_prev_exc;")
                 self.emit("                    goto cratix_try_end_" + str(try_id) + ";")
                 self.emit("                }")
             self.emit("                break;")
@@ -2096,9 +2124,16 @@ class FunctionGen:
             self.emit_inner_def(node)
             return
         if kind == "raise":
-            # **裸 `raise`（重抛当前异常）** ✅ —— 需要"当前异常"的稳定存储 ✅（还没做 ✅）-> 明确回退 ✅
+            # **裸 `raise`（重抛当前异常）** ✅ —— 用每函数一个"当前异常"变量 ✅
             if not node.kids or node.kids[0] is None:
-                raise Unsupported("裸 raise（重抛当前异常）")
+                self.needs_cur_exc = True
+                self.emit("if (cratix_cur_exc == NULL) {")
+                self.emit("    PyErr_SetString(PyExc_RuntimeError, \"No active exception to reraise\");")
+                self.emit("    goto cratix_error;")
+                self.emit("}")
+                self.emit("PyErr_SetRaisedException(Py_NewRef(cratix_cur_exc));")
+                self.emit("goto cratix_error;")
+                return
             t = self.emit_expr(node.kids[0])
             self.emit("cratix_raise(" + t + ");")
             self.emit("goto cratix_error;")

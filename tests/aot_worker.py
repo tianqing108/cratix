@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_reraise(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_reraise.py", "cratix_corpus_reraise", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "ok_branch": mod.catch_outer(1),
+        "rereased": mod.catch_outer(-1),
+        "nested": mod.nested_reraise(7),
+        "inner": mod.nested_class_use(),
+    }
+
+
 def op_modern(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_modern.py", "cratix_corpus_modern", out_dir)
     return {
@@ -468,6 +480,8 @@ def main() -> int:
             data = op_inherit(out_dir)
         elif op == "modern":
             data = op_modern(out_dir)
+        elif op == "reraise":
+            data = op_reraise(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

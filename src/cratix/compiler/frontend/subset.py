@@ -60,6 +60,9 @@ def check_class(node: ast.ClassDef) -> None:
             continue  # 文档字符串 ✅
         if isinstance(stmt, ast.Pass):
             continue
+        # **类体里的类** ✅ 已支持 ✅（源码 exec 后挂到外层类上 ✅）
+        if isinstance(stmt, ast.ClassDef):
+            continue
         raise Unsupported("类体语句：" + type(stmt).__name__)
 
 

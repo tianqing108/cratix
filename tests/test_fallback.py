@@ -324,6 +324,16 @@ class FunctionFallbackTest(unittest.TestCase):
         # **hasattr 必须返回真布尔对象** ✅（以前把 int 当指针存 ✅）
         self.assertEqual(data["truth"], [True, False])
 
+    def test_22_reraise_and_nested_class(self):
+        """**裸 raise** ✅（重抛当前异常 ✅）+ **类体里的类** ✅。"""
+        data = run_worker("reraise")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["ok_branch"], "ok")
+        # **重抛要能穿出外层 handler** ✅（异常类型与消息都保留 ✅）
+        self.assertEqual(data["rereased"], "caught:negative")
+        self.assertEqual(data["nested"], "k:7")
+        self.assertEqual(data["inner"], "inner")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])
