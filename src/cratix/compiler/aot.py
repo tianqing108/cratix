@@ -18,7 +18,8 @@ from . import driver
 PAYLOAD_PREFIX = "ext/"
 
 
-def compile_modules(modules, out_dir: Path, python_prefix: Path | None = None):
+def compile_modules(modules, out_dir: Path, python_prefix: Path | None = None,
+                   options: str = "", on_result=None):
     """编译一批 (模块名, 源文件) ✅。
 
     modules: list[tuple[str, Path]] —— 模块名是点号形式 ✅（如 hello.app ✅）。
@@ -43,7 +44,18 @@ def compile_modules(modules, out_dir: Path, python_prefix: Path | None = None):
             failures[module_name] = "没有可 AOT 化的函数"
             continue
         try:
-            pyd = driver.build_pyd(mc, out_dir, python_prefix=python_prefix)
+            stem = mc.init_symbol[len("PyInit_"):]
+            fingerprint = driver.fingerprint_for(module_name, source, options)
+            stamp = out_dir / (stem + ".fp")
+            pyd = driver.build_pyd(
+                mc,
+                out_dir,
+                python_prefix=python_prefix,
+                fingerprint=fingerprint,
+                stamp_path=stamp,
+            )
+            if on_result is not None:
+                on_result(module_name, fingerprint, pyd)
         except Exception as exc:  # noqa: BLE001 - 编译失败要回退 ✅
             failures[module_name] = "C 编译失败：" + str(exc)[:200]
             continue

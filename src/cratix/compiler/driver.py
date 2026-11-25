@@ -21,6 +21,9 @@ from .backend.runtime import HEADER_NAME, RUNTIME_H
 from .frontend.scope import Scope, analyze_function
 from .frontend.subset import Unsupported, check_class, check_function
 
+# 编译器版本 ✅ —— 改动编译器时 ✅ 指纹要变 ✅（否则会复用旧产物 ✅ ✅）。
+COMPILER_VERSION = "cratix-aot-1"
+
 
 @dataclass
 class FunctionPlan:
@@ -89,6 +92,26 @@ def _module_code_objects(source: str, filename: str) -> dict:
             except Exception:  # noqa: BLE001
                 continue
     return out
+
+def fingerprint_for(module_name: str, source: Path, options: str = "") -> str:
+    """模块的编译指纹 ✅（增量编译的依据 ✅）。
+
+    指纹 = 源码内容 ✅ + 编译器版本 ✅ + 解释器身份 ✅ + 选项 ✅
+    → 任何一个变了都要重编 ✅ ✅。
+    """
+    import hashlib
+    import sys
+
+    digest = hashlib.sha256()
+    digest.update(Path(source).read_bytes())
+    digest.update(COMPILER_VERSION.encode("utf-8"))
+    digest.update(module_name.encode("utf-8"))
+    digest.update(sys.version.encode("utf-8"))
+    digest.update(sys.implementation.cache_tag.encode("utf-8"))
+    digest.update(str(sys.flags.optimize).encode("utf-8"))
+    digest.update(options.encode("utf-8"))
+    return digest.hexdigest()
+
 
 def init_symbol_for(module_name: str) -> str:
     """唯一的 init 符号 ✅（PyInit_<末段> 会被同名模块冲突 ✅ —— 用哈希 ✅）。"""
@@ -275,7 +298,8 @@ def compile_module(path: Path, module_name: str | None = None) -> ModuleCompile:
     return result
 
 def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path | None = None,
-              alias_init: str | None = None) -> Path:
+              alias_init: str | None = None, fingerprint: str | None = None,
+              stamp_path: Path | None = None) -> Path:
     """把生成的 C 编译成 .pyd ✅（MSVC ✅ —— 工具链定位复用 stubbuild ✅）。
 
     产物文件名用 **init 符号的末段** ✅（cratix_<hash>.pyd ✅）——
@@ -289,6 +313,14 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = module_compile.init_symbol[len("PyInit_"):]
     c_path = out_dir / (stem + ".c")
+    pyd_path = out_dir / (stem + ".pyd")
+    # **增量** ✅：指纹一致且产物在 ✅ -> 跳过编译 ✅（省掉 cl + link ✅）。
+    if fingerprint and stamp_path is not None and pyd_path.is_file():
+        try:
+            if stamp_path.read_text(encoding="utf-8").strip() == fingerprint:
+                return pyd_path
+        except OSError:
+            pass
     if alias_init:
         # **必须带上 fallback_code 与 classes** ✅ —— 漏传 ✅ 会丢掉类与回退函数 ✅
         module_compile.c_source = codegen.generate_module_single_phase(
@@ -317,7 +349,12 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
         '/LIBPATH:"' + str(libs) + '" ' + lib_name
     )
     stubbuild.run_cmd(cmd)
-    pyd = out_dir / (stem + ".pyd")
+    pyd = pyd_path
     if not pyd.is_file():
         raise RuntimeError("未生成 .pyd：" + str(pyd))
+    if fingerprint and stamp_path is not None:
+        try:
+            stamp_path.write_text(fingerprint, encoding="utf-8")
+        except OSError:
+            pass
     return pyd
