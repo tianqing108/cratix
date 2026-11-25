@@ -2252,6 +2252,25 @@ class FunctionGen:
                 # **借用的引用不能留在临时变量里** ✅ —— 出口清理会 DECREF 它 ✅ -> 过度释放 ✅
                 self.emit(fn + " = NULL;")
                 args = self.new_tmp()
+                if factory.get("cells"):
+                    # **晚绑定** ✅ —— 只传 cell 字典 ✅（方法调用时才取值 ✅）
+                    if not self.cells_var:
+                        self.emit("{ PyErr_SetString(PyExc_NameError, \"cratix: 类工厂缺 cell 字典\"); goto cratix_error; }")
+                        return
+                    self.emit(args + " = PyTuple_Pack(1, " + self.cells_var + ");")
+                    self.emit("if (" + args + " == NULL) { Py_DECREF(" + fn_copy + "); goto cratix_error; }")
+                    result_tmp = self.new_tmp()
+                    self.emit(result_tmp + " = PyObject_Call(" + fn_copy + ", " + args + ", NULL);")
+                    self.emit("Py_DECREF(" + args + ");")
+                    self.emit(args + " = NULL;")
+                    self.emit("Py_DECREF(" + fn_copy + ");")
+                    self.emit(fn_copy + " = NULL;")
+                    self.emit("if (" + result_tmp + " == NULL) goto cratix_error;")
+                    var = self.local_var(factory["class_name"])
+                    self.emit("Py_XDECREF(" + var + ");")
+                    self.emit(var + " = " + result_tmp + ";")
+                    self.emit(result_tmp + " = NULL;")
+                    return
                 self.emit(args + " = PyTuple_New(" + str(len(factory["captured"])) + ");")
                 self.emit("if (" + args + " == NULL) { Py_DECREF(" + fn_copy + "); goto cratix_error; }")
                 for index, cap in enumerate(factory["captured"]):

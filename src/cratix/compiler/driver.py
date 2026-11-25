@@ -66,6 +66,8 @@ class ModuleCompile:
     inline_class_sources: dict = field(default_factory=dict)
     # **函数里"捕获外层局部"的类** ✅（(行, 列) -> 工厂函数 ✅）
     class_factories: dict = field(default_factory=dict)
+    # **类工厂需要的"晚绑定"名字** ✅（函数名 -> 名字集合 ✅ —— 要进 cell 字典 ✅）
+    late_captures: dict = field(default_factory=dict)
     # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
     body_marks: list = field(default_factory=list)
     # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
@@ -273,6 +275,19 @@ def _module_level_supported(stmt) -> bool:
     return False
 
 
+def _rewrite_class_source(segment: str, captured) -> str:
+    """把类源码里对捕获名的**读取**改写成 `_cratix_cells["名字"]` ✅（晚绑定 ✅）。"""
+    from .backend.codegen import _CellRewriter
+
+    try:
+        tree = ast.parse(segment)
+        tree = _CellRewriter(captured).visit(tree)
+        text = ast.unparse(ast.fix_missing_locations(tree))
+    except Exception:  # noqa: BLE001 - 改写不了就回退 ✅
+        return ""
+    return text + chr(10)
+
+
 def _bound_before(func_node, class_node) -> set:
     """**类定义那一刻已经绑定的名字** ✅（参数 + 之前赋过值的局部 ✅）。
 
@@ -424,7 +439,29 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 # （实测：`class Guard:` 在 `log = []` **之前** ✅ 方法里用 `log` ✅ —— 这正是
                 #  真实代码最常见的写法 ✅）。这类先**明确回退** ✅（语义正确 ✅）。
                 bound = _bound_before(func_node, node) if func_node is not None else set()
-                if any(name not in bound for name in captured):
+                late = [name for name in captured if name not in bound]
+                if late:
+                    # **晚绑定** ✅ —— 类定义时这些名字还没赋值（`class C:` 写在 `x = ...` 之前 ✅）。
+                    # 做法 ✅：把类源码里对它们的**读取**改写成 `_cratix_cells["名字"]` ✅，
+                    # 工厂收 **cell 字典** 而不是值 ✅ -> 方法在**调用时**才取值 ✅（语义与闭包一致 ✅）。
+                    rewritten = _rewrite_class_source(segment, captured)
+                    if not rewritten:
+                        return
+                    factory = "_cratix_cls_factory_" + str(len(result.class_factories))
+                    body = chr(10).join("    " + line for line in rewritten.splitlines())
+                    result.class_factories[key] = {
+                        "name": factory,
+                        "captured": sorted(captured),
+                        "class_name": node.name,
+                        "cells": True,
+                        "source": (
+                            "def " + factory + "(_cratix_cells):" + chr(10)
+                            + body + chr(10)
+                            + "    return " + node.name + chr(10)
+                        ),
+                    }
+                    if func_node is not None:
+                        result.late_captures.setdefault(func_node.name, set()).update(captured)
                     return
                 factory = "_cratix_cls_factory_" + str(len(result.class_factories))
                 body = chr(10).join("    " + line for line in segment.splitlines())
@@ -613,6 +650,10 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 if captured:
                     genexp_captures[key] = sorted(captured)
                     inner_cells.setdefault(func_node.name, set()).update(captured)
+
+    # **类工厂的晚绑定名字 -> cell 字典** ✅（必须在建 gen 之前合并 ✅）
+    for _owner, _names in result.late_captures.items():
+        inner_cells.setdefault(_owner, set()).update(_names)
 
     # --- lambda ✅：先扫出来 ✅，编译成**模块级原生函数** ✅（使用点按名字取 ✅）---
     lambda_gens: list = []
