@@ -138,13 +138,8 @@ def check_function(node: ast.FunctionDef, scope) -> None:
 
     # **`with` 多个管理器** ✅ 暂时回退 ✅ —— 第二个管理器的帧记录有问题 ✅
     # （实测：`with A() as a, B() as b:` 段错误 ✅，pitfall #136 ✅）。
-    # **`with` 多管理器 + 函数里的类** ✅ -> 段错误 ✅（pitfall #137 ✅）。
-    # 只有这个组合坏 ✅ —— 模块级类的多管理器一直是好的 ✅（`corpus_with` ✅）。
-    has_local_class = any(isinstance(sub, ast.ClassDef) for sub in ast.walk(node))
-    if has_local_class:
-        for child in ast.walk(node):
-            if isinstance(child, ast.With) and len(child.items) > 1:
-                raise Unsupported("with 多个管理器 + 函数里的类")
+    # （`with` 多管理器本身没问题 ✅ —— #137 的真因是**类工厂捕获了尚未赋值的变量** ✅，
+    #  已在 driver 里修掉 ✅，见 pitfalls #137 ✅）
 
     for child in ast.walk(node):
         reason = UNSUPPORTED_NODES.get(type(child))

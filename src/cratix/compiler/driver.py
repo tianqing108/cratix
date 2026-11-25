@@ -273,6 +273,34 @@ def _module_level_supported(stmt) -> bool:
     return False
 
 
+def _bound_before(func_node, class_node) -> set:
+    """**类定义那一刻已经绑定的名字** ✅（参数 + 之前赋过值的局部 ✅）。
+
+    用行号做**保守**判断 ✅：只要有赋值语句在类定义之前 ✅ 就算"已绑定" ✅。
+    """
+    limit = getattr(class_node, "lineno", 0)
+    # **参数** ✅（只算**本函数**的 ✅ —— 方法参数不算 ✅，实测踩过 ✅）
+    bound: set = set()
+    args = func_node.args
+    for item in list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs):
+        bound.add(item.arg)
+    for item in (args.vararg, args.kwarg):
+        if item is not None:
+            bound.add(item.arg)
+
+    def walk(node) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                continue  # **不进嵌套作用域** ✅
+            if isinstance(child, ast.Name) and isinstance(child.ctx, (ast.Store, ast.Del)):
+                if getattr(child, "lineno", 0) < limit:
+                    bound.add(child.id)
+            walk(child)
+
+    walk(func_node)
+    return bound
+
+
 def _deleted_locals(func_node) -> set:
     """**会被 `del` 的局部名** ✅（读它们时要检查 NULL ✅）。只算本层的 `del` ✅。"""
     names: set = set()
@@ -375,7 +403,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     # 2. **函数体里的类**（`def f(): class C: ...` ✅）—— 真实代码里非常多 ✅
     #    （`functools.cmp_to_key` ✅ / `csv.sniff` ✅ / `ctypes.CFUNCTYPE` ✅ ...）
     # 顶层类走"按源码位置创建" ✅，这两类走"就地 exec 源码" ✅（语义一致 ✅）。
-    def _register_inline_class(node, scope=None) -> None:
+    def _register_inline_class(node, scope=None, func_node=None) -> None:
         key = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
         if key in result.inline_class_sources or key in result.class_factories:
             return
@@ -392,6 +420,12 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             }
             captured = sorted(used & (scope.locals_ - {"__class__"}))
             if captured:
+                # **类定义时还没赋值的捕获变量** ✅ -> 工厂会把它当实参传 NULL ✅ -> 段错误 ✅
+                # （实测：`class Guard:` 在 `log = []` **之前** ✅ 方法里用 `log` ✅ —— 这正是
+                #  真实代码最常见的写法 ✅）。这类先**明确回退** ✅（语义正确 ✅）。
+                bound = _bound_before(func_node, node) if func_node is not None else set()
+                if any(name not in bound for name in captured):
+                    return
                 factory = "_cratix_cls_factory_" + str(len(result.class_factories))
                 body = chr(10).join("    " + line for line in segment.splitlines())
                 result.class_factories[key] = {
@@ -431,7 +465,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             func_scope = analyze_function(func_node, module_globals)
             for sub in ast.walk(func_node):
                 if isinstance(sub, ast.ClassDef) and sub is not func_node:
-                    _register_inline_class(sub, func_scope)
+                    _register_inline_class(sub, func_scope, func_node)
     # **`from m import *`** ✅：那些名字在**编译期**就要知道 ✅（否则函数里用到会被当成闭包自由变量 ✅）。
     # 直接把模块导进来取 `__all__` / `dir()` ✅ —— 运行期本来也要导入它 ✅。
     for stmt in tree.body:
