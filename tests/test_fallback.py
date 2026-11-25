@@ -389,6 +389,15 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["substring"], [True, False])
         self.assertEqual(data["chained"], [True, False])
 
+    def test_28_attr_names_in_branches(self):
+        """**同一个属性名出现在多条分支** ✅ —— 以前只有首次使用的那条会初始化 ✅ -> 段错误 ✅。"""
+        data = run_worker("attr_branches")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["second_branch"], ["box", "7"])
+        # 两个 handler 都读 exc.code ✅（第二个 handler 才真的执行 ✅）
+        self.assertEqual(data["handlers"], ["1:pos", "2:neg/负数"])
+        self.assertEqual(data["two_branches"], ["box7", "7"])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

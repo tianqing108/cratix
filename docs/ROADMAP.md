@@ -765,7 +765,15 @@ f-string ✅ / 生成器表达式 ✅ / JSON ✅ / 文件 ✅ / 子命令 ✅ / 
 
 **规避** ✅：`examples/notes` 的 `run()` 合并成**一层 try** ✅ -> `probe_frozen.py` **6/6** ✅，
 三条错误路径都打印正确消息 ✅（`出错了 ✅（no-text）：add 需要内容` ✅ 等 ✅）。
-**仍待查** ⬜：两层 try 帧的弹出/释放是否在某条路径上不配对（怀疑 `cratix_try_types` 的 DECREF ✅）。
+**根因已找到并修掉** ✅（pitfall #133 ✅）：**不是 try 帧** ✅，是**属性名静态量** ✅ ——
+生成器把"interned 属性名初始化"和"第一次使用"绑在一起 ✅，只用 `declared_attrs` 去重 ✅ ->
+初始化只落在**函数里第一次用到该属性名的那条分支** ✅；别的分支用到同一个属性名时 static 还是 `NULL` ✅ ->
+`PyObject_GetAttr(obj, NULL)` ✅ -> **段错误** ✅。
+
+**修法** ✅：每次都做一次幂等的 `if (ref == NULL) {...}` 检查 ✅（声明照旧只在函数顶部一次 ✅）。
+
+**实测** ✅：两条 try 的复现修好 ✅；`examples/notes` **恢复原来的两层 try** 也全对 ✅
+（三条错误路径都打印正确消息 ✅）；新增 `corpus_attr_branches` 回归 ✅。
 
 **可复现基线更新** ✅：stub 改了（argv ✅）-> 打包产物字节变了 ✅ ——
 `examples/hello` 的 sha256 从 `e2c06f81…` 变成 **`a29107a3…`** ✅。

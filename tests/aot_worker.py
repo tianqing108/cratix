@@ -143,6 +143,17 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_attr_branches(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_attr_branches.py", "cratix_corpus_attr_branches", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "second_branch": [mod.read_in_second_branch(v) for v in (True, False)],
+        "handlers": [mod.raise_in_second_handler(v) for v in (1, -1)],
+        "two_branches": [mod.two_attr_branches(v) for v in (True, False)],
+    }
+
+
 def op_membership(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_membership.py", "cratix_corpus_membership", out_dir)
     return {
@@ -554,6 +565,8 @@ def main() -> int:
             data = op_local_class(out_dir)
         elif op == "membership":
             data = op_membership(out_dir)
+        elif op == "attr_branches":
+            data = op_attr_branches(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

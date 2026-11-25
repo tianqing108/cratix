@@ -1188,6 +1188,8 @@ class FunctionGen:
         self.genexp_sources: dict = {}
         # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
         self.needs_cur_exc = False
+        # **本函数用到的内部属性名** ✅（ref -> 显示名 ✅；初始化提到入口 ✅）
+        self.attr_used: dict = {}
         # **会被 `del` 的局部名** ✅ —— 读它们时要检查 NULL ✅（UnboundLocalError ✅）
         self.deleted_locals = set(deleted_locals or ())
         # **match 语句的标签编号** ✅
@@ -1412,17 +1414,33 @@ class FunctionGen:
         return "cratix_an_" + c_ident(target_attr(node))
 
     def emit_attr_name(self, node) -> None:
-        """惰性初始化 interned 属性名 ✅（函数内 static ✅ ✅ —— 每个函数只声明一次 ✅ ✅）。"""
+        """登记 interned 属性名 ✅ —— **初始化统一提到函数入口** ✅（见 `attr_init_lines` ✅）。
+
+        **为什么不能"首次用到的地方就地初始化"** ✅：那条初始化会落在**某一条分支**里 ✅ ——
+        别的分支用到同一个属性名时 ✅ static 还是 NULL ✅ -> `PyObject_GetAttr(obj, NULL)` ✅ ->
+        **段错误** ✅（实测 ✅：一个函数里两个 `except` 都读 `exc.code` ✅，第二个分支必崩 ✅）。
+        """
         ref = self.attr_ref(node)
-        if ref in self.declared_attrs:
-            return
-        self.declared_attrs.add(ref)
-        # **声明必须在函数顶部** ✅ —— 写在块里 ✅ 别的分支就看不见 ✅ ✅
-        # （实测：then 分支首次用到 ✅ -> 声明落在 then 里 ✅ -> else 分支编译报未声明 ✅ ✅）
+        self.declared_attrs.add(ref)  # **声明**（函数顶部 static ✅）
+        # **每次使用前都检查一次** ✅ —— 幂等 ✅（第一次成功后就是一条可预测的分支 ✅）。
+        # 以前用 `declared_attrs` 去重 ✅ -> 初始化只落在**首次使用的那条分支**里 ✅ ->
+        # 别的分支用到同一个属性名时 static 还是 NULL ✅ -> `PyObject_GetAttr(obj, NULL)` ✅ -> 段错误 ✅
+        # （实测 ✅：一个函数里两个 `except` 都读 `exc.code` ✅，第二个分支必崩 ✅）。
         self.emit("if (" + ref + " == NULL) {")
         self.emit("    " + ref + " = PyUnicode_InternFromString(" + c_string(target_attr(node)) + ");")
         self.emit("    if (" + ref + " == NULL) goto cratix_error;")
         self.emit("}")
+        self.attr_used[ref] = target_attr(node)
+
+    def attr_init_lines(self) -> list:
+        """**函数入口**的属性名初始化 ✅（每个属性名一条 ✅ 幂等 ✅）。"""
+        lines = []
+        for ref in sorted(self.attr_used):
+            lines.append("    if (" + ref + " == NULL) {")
+            lines.append("        " + ref + " = PyUnicode_InternFromString(" + c_string(self.attr_used[ref]) + ");")
+            lines.append("        if (" + ref + " == NULL) goto cratix_error;")
+            lines.append("    }")
+        return lines
 
     def emit_cells_init(self) -> None:
         """**cell 字典** ✅ —— 被内层函数捕获的局部变量放这里 ✅（内层按名字读 ✅ 晚绑定 ✅）。"""

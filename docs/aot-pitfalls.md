@@ -153,6 +153,34 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 **追加发现** ✅：工厂路径里 `Py_DECREF(args)` 之后**忘了置 NULL** ✅ ->
 函数出口的清理**又 DECREF 一次** ✅ -> 双重释放 ✅（已修 ✅，但**不是**析构崩溃的唯一原因 ✅）。
 
+## 追加：#133 **真因**：interned 属性名的初始化只落在"首次使用的那条分支" ✅
+
+**#132 的真正根因找到了** ✅ —— 不是 try 帧 ✅，而是**属性名静态量** ✅：
+
+```c
+/* 生成器把"初始化"和"第一次使用"绑在一起 ✅ */
+if (cratix_an_v_code == NULL) { cratix_an_v_code = PyUnicode_InternFromString("code"); ... }
+cratix_t2 = PyObject_GetAttr(v_exc, cratix_an_v_code);      /* 第一条分支 ✅ */
+...
+cratix_t16 = PyObject_GetAttr(v_exc, cratix_an_v_code);     /* 另一条分支 ✅ 但初始化没来过 ✅ */
+```
+
+以前用 `declared_attrs` **去重** ✅ -> 那段初始化只会出现在**函数里第一次用到这个属性名的地方** ✅。
+**只要那条分支没执行** ✅ —— 静态量还是 `NULL` ✅ -> `PyObject_GetAttr(obj, NULL)` ✅ -> **段错误** ✅。
+
+这解释了全部观测 ✅：
+- 为什么"第一个 `try` 正常返回 ✅、第二个 `except` 读 `exc.code`"必崩 ✅（第一个 `except` 里的初始化没跑过 ✅）；
+- 为什么"把方法换成模块函数"就好了 ✅（那就只有一处使用 ✅）；
+- 为什么"删掉一个 try"就好了 ✅（同理 ✅）。
+
+**修法** ✅：**每次都检查** ✅（幂等 ✅、可预测分支 ✅）——
+`emit_attr_name` 不再因 `declared_attrs` 提前返回 ✅（声明照旧只在函数顶部一次 ✅）。
+
+**实测** ✅：两条 try 的复现 ✅ -> `2: bad-index / 序号越界：99` ✅；
+`examples/notes` **恢复成原来的两层 try** 也全对 ✅
+（`出错了 ✅（empty-text）…` ✅ / `出错了 ✅（bad-index）…` ✅ / `未知命令：bogus` ✅）；
+新增语料 `corpus_attr_branches` ✅ 专门盯这个形状 ✅。
+
 ## 追加：#132 一个函数里两个 `try/except`（捕获同一异常类）✅
 
 **现象** ✅：`examples/notes` 的三条**错误路径**（`add ""` ✅ / `done 99` ✅ / `--category nope` ✅）
