@@ -36,5 +36,6 @@ python -m cratix build --config cratix.toml --backend aot --strict-aot
 ## 已知限制 ✅
 
 - 差分探针会忽略 `cratix_*` / `_cratix_*` 前缀的内部名字 ✅（见 `compiler/probe.py` ✅）；
-- 带关键字的方法调用目前**还会崩** ✅（最小复现见 `docs/aot-pitfalls.md` #126 ✅）——
-  所以这个示例刻意用**手写参数解析** ✅ 避开它 ✅。
+- **带关键字的方法调用已修** ✅（详见 `docs/aot-pitfalls.md` #128 ✅）；
+- 打包后的 exe **还收不到命令行参数** ✅（`docs/aot-pitfalls.md` #127 ✅）——
+  所以这个示例目前只能用**默认参数**跑 ✅，命令行参数要等 stub 接上 argv ✅。

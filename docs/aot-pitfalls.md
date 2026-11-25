@@ -161,7 +161,7 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | --- | --- | --- | --- |
 | 126 | 同一函数里**两次带关键字的方法调用** ✅ -> `C2374: cratix_kn 重定义` ✅ | 关键字名**内联声明**（`PyObject *cratix_kn = ...` ✅）-> 一个函数里出现两次就重复声明 ✅ | **已修** ✅：改成 `new_tmp()` 临时变量 ✅ |
 | 127 | 打包后的 exe **收不到命令行参数** ✅（`sys.argv[1:]` 为空 ✅） | `stub.c` 的入口是 `int main(void)` ✅ —— **根本没接 argv** ✅ | **未修** ✅（下一轮：`main(int argc, char **argv)` ✅ + `sys.argv` 设值 ✅） |
-| 128 | 带关键字的方法调用**运行期崩** ✅（`box.tag("x", prefix="[", suffix="]")` ✅） | 待查 ✅（`PyObject_VectorcallMethod` + kwnames 路径 ✅） | **未修** ✅（最小复现已记录 ✅） |
+| 128 | 带关键字的方法调用**运行期崩** ✅（`box.tag("x", prefix="[", suffix="]")` ✅） | **两个 bug 叠在一起** ✅：(a) `PyTuple_SET_ITEM` **偷走引用** ✅，而临时变量出口又 DECREF 一次 ✅ -> 名字串被过度释放 ✅；(b) 修掉 (a) 之后仍然报 `cratix: unexpected keyword argument` ✅ —— `PyObject_VectorcallMethod` + kwnames 喂给**方法描述符**的布局不对 ✅ | **(a) 已修** ✅（SET_ITEM 后置 NULL ✅）；**(b) 先保正确** ✅：`n_kw > 0` 的方法调用**走通用路径** ✅（`GetAttr` + `Call` ✅），快路径只留给纯位置调用 ✅ |
 | 129 | 差分探针把 `_cratix_*` / `cratix_*` 当成"AOT 多出的名字" ✅ -> `--strict-aot` 直接失败 ✅ | 编译器内部辅助（生成器表达式辅助 ✅ 跳板 ✅ 类工厂 ✅）本来就住在模块命名空间里 ✅ | 探针**只忽略这些前缀** ✅；根因（命名空间污染）留 TODO ✅ |
 
 **教训** ✅：`examples/hello` 这种"最小示例"**验不出应用级问题** ✅ ——

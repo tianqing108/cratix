@@ -2838,6 +2838,12 @@ class FunctionGen:
         n = n_pos + n_kw
         if n + 1 > MAX_VECTORCALL_ARGS:
             return False
+        if n_kw:
+            # **带关键字的方法调用走通用路径** ✅ —— `PyObject_VectorcallMethod` + kwnames 这条路上
+            # 我们喂给"方法描述符"的参数布局不对 ✅（实测：`tag("x", prefix="[")` 报
+            # `cratix: unexpected keyword argument` ✅ —— 关键字被同时当成位置参数 ✅）。
+            # 通用路径（`PyObject_GetAttr` + `PyObject_Call`）**一定正确** ✅ —— 先保正确 ✅。
+            return False
         # **内建类型的常见方法** ✅（list.append / dict.get ✅ —— 类型对得上才走快路径 ✅）
         if self.emit_builtin_method_fast(node, t):
             return True
@@ -2857,6 +2863,8 @@ class FunctionGen:
             self.emit(args_tuple + " = PyTuple_New(" + str(len(arg_vals)) + ");")
             self.emit("if (" + args_tuple + " == NULL) goto cratix_error;")
             for index, value in enumerate(arg_vals):
+                # **先 INCREF 再 SET_ITEM** ✅ —— 元组拿走"额外"那一份 ✅，
+                # 临时变量自己那一份留给函数出口清理 ✅（不能置 NULL ✅）。
                 self.emit("Py_INCREF(" + value + ");")
                 self.emit("PyTuple_SET_ITEM(" + args_tuple + ", " + str(index) + ", " + value + ");")
             self.emit(t + " = " + direct + "(" + receiver + ", " + args_tuple + ", NULL);")
@@ -2886,6 +2894,9 @@ class FunctionGen:
                 self.emit(kn + " = PyUnicode_FromString(" + c_string(name) + ");")
                 self.emit("if (" + kn + " == NULL) goto cratix_error;")
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", " + kn + ");")
+                # **SET_ITEM 偷走引用** ✅ -> 临时变量必须置 NULL ✅
+                # （否则函数出口再 DECREF 一次 ✅ -> 名字串被过度释放 ✅ -> 崩溃 ✅）
+                self.emit(kn + " = NULL;")
         else:
             self.emit("cratix_kwnames = NULL;")
         # **方法名走常量池** ✅ —— 原来**每次调用**都 `PyUnicode_FromString` ✅（真分配 ✅）
@@ -2953,6 +2964,9 @@ class FunctionGen:
                 self.emit(kn + " = PyUnicode_FromString(" + c_string(name) + ");")
                 self.emit("if (" + kn + " == NULL) goto cratix_error;")
                 self.emit("PyTuple_SET_ITEM(cratix_kwnames, " + str(j) + ", " + kn + ");")
+                # **SET_ITEM 偷走引用** ✅ -> 临时变量必须置 NULL ✅
+                # （否则函数出口再 DECREF 一次 ✅ -> 名字串被过度释放 ✅ -> 崩溃 ✅）
+                self.emit(kn + " = NULL;")
         else:
             self.emit("cratix_kwnames = NULL;")
         # **nargsf 只算"位置参数"** ✅ —— 关键字的值排在后面 ✅、个数由 kwnames 决定 ✅。
