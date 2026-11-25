@@ -1908,8 +1908,11 @@ class FunctionGen:
         depth_var = "cratix_ldepth_" + str(idx)
         broke_var = "cratix_lbroke_" + str(idx)
         self.emit("{")
-        self.emit("    int " + depth_var + " = cratix_try_n;")
-        self.emit("    int " + broke_var + " = 0;")
+        for _name in (depth_var, broke_var):
+            if _name not in self.int_helpers:
+                self.int_helpers.append(_name)  # 声明提到函数顶部，handler 体也看得见
+        self.emit("    " + depth_var + " = cratix_try_n;")
+        self.emit("    " + broke_var + " = 0;")
         self.loop_stack.append({
             "depth": depth_var,
             "broke": broke_var,
@@ -1917,6 +1920,8 @@ class FunctionGen:
             "helpers": len(self.helper_names),
             # **循环开始时已有的 finally 块数** ✅（break/continue 只跑"循环体内"的 ✅）
             "finally": len(self.finally_blocks),
+            # **本循环的跳转标签** ✅ —— break/continue 一律用 goto ✅（handler 体在函数级 ✅ 不能写 C 的 continue）
+            "label": "cratix_lp_" + str(idx),
         })
         return depth_var, broke_var
 
@@ -1944,11 +1949,13 @@ class FunctionGen:
         if not self.loop_stack:
             return
         frame = self.loop_stack[-1]
+        self.emit(str(frame.get("label", "cratix_lp_x")) + "_cont: ;")
         self.emit_tmp_cleanup(frame["tmp"], "    ")
         self.emit_helper_cleanup(frame["helpers"], "    ")
 
     def end_loop(self, broke_var, orelse) -> None:
         """收尾循环 ✅ —— else 分支只在**没有 break** 时执行 ✅（CPython 语义 ✅）。"""
+        self.emit(str(self.loop_stack[-1].get("label", "cratix_lp_x")) + "_brk: ;")
         self.loop_stack.pop()
         if orelse:
             self.emit("    if (!" + broke_var + ") {")
@@ -2172,7 +2179,8 @@ class FunctionGen:
             # **跳之前也要放** ✅（否则这条路径上的引用会留到函数出口 ✅）
             self.emit_tmp_cleanup(frame["tmp"])
             self.emit_helper_cleanup(frame["helpers"])
-            self.emit("break;")
+            # **用 goto** ✅ —— handler 体是函数级生成的 ✅，C 的 `break` 在那里非法 ✅
+            self.emit("goto " + frame["label"] + "_brk;")
             return
         if kind == "continue":
             if not self.loop_stack:
@@ -2182,7 +2190,7 @@ class FunctionGen:
             self.emit_unwind_to(frame["depth"])
             self.emit_tmp_cleanup(frame["tmp"])
             self.emit_helper_cleanup(frame["helpers"])
-            self.emit("continue;")
+            self.emit("goto " + frame["label"] + "_cont;")
             return
         if kind == "pass" or kind == "noop":
             return

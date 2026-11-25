@@ -223,6 +223,29 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#141 **`try/finally` 的 handler 里 `break`/`continue`**（从"明确回退"改成真支持 ✅）
+
+**以前** ✅：这形状会生成**非法 C** ✅（`continue` 落在 loop 外 ✅ / `cratix_ldepth_*` 未声明 ✅），
+所以只能**整函数回退** ✅（#136 的权宜之计 ✅）。
+
+**根因（两条）** ✅：
+
+1. `break`/`continue` 以前直接发 **C 的 `break;` / `continue;`** ✅ ——
+   但 **handler 体是函数级生成的** ✅（它要看见外层局部 ✅），那里写 `continue` 是非法的 ✅；
+2. `cratix_ldepth_<n>` / `cratix_lbroke_<n>` 以前声明在**循环块里** ✅ ——
+   handler 体在那个块外 ✅ -> 看不见 ✅。
+
+**修法** ✅：
+
+- 每个循环两个标签 ✅：`cratix_lp_<n>_cont` ✅（每轮末尾 ✅）与 `cratix_lp_<n>_brk` ✅（循环体之后 ✅）——
+  `break`/`continue` 一律 **`goto`** ✅，于是**在 handler 体里也合法** ✅；
+- 深度/标志变量**提到函数顶部**声明 ✅（handler 体也看得见 ✅）；
+- 标签名**存在循环帧里** ✅ —— 第一版用 `loop_index - 1` 推算 ✅ -> 推导式等路径上**标签重定义**（C2045 ✅）✅。
+
+**实测** ✅：`f([1,-2,3])` -> `(7, 1)` ✅（`continue` 前 finally 跑了 ✅）、
+`g([1,9,2])` -> `[1, -1, -9]` ✅（`break` 前 finally 跑了 ✅）；
+`corpus_statements` 的 `try_in_loop` **不再回退** ✅；91 项测试全绿 ✅、全量标准库 0 崩溃 ✅。
+
 ## 追加：#136 **语句组合差分**（两个"硬失败"被改成明确回退 ✅）
 
 第三个差分语料 `tests/corpus/corpus_statements.py` ✅：

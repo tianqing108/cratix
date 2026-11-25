@@ -423,9 +423,9 @@ class FunctionFallbackTest(unittest.TestCase):
         链式调用、assert、global、继承 + super + classmethod（源码版当基准）。"""
         data = run_worker("statements")
         self.assertTrue(data["module_ok"])
-        # **with 多管理器 + 函数里的类现在能 AOT 了** ✅（#137 的晚绑定修好 ✅）；
-        # try/finally 的 handler 里 continue 仍明确回退 ✅
-        self.assertEqual(data["fallback"], ["try_in_loop"])
+        # **都能 AOT 了** ✅ —— with 多管理器（#137 晚绑定 ✅）、
+        # try/finally 的 handler 里 continue（#141 改成 goto 跳转 ✅）
+        self.assertEqual(data["fallback"], [])
         self.assertEqual(data["mismatches"], [])
         self.assertGreaterEqual(data["compared"], 17)
 

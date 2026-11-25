@@ -132,9 +132,8 @@ def check_function(node: ast.FunctionDef, scope) -> None:
     # 那会让**整个模块编译失败** ✅。这里明确回退 ✅（语义正确 ✅ 只是不加速 ✅）。
     # **只拒绝"handler 里跳出"的那种** ✅ —— `try` 体里跳出（`for: try: break` ✅）
     # 一直是好的 ✅（`corpus_finally` 就在测它 ✅）；坏的是 `except` 分支里 `continue` ✅。
-    for child in ast.walk(node):
-        if isinstance(child, ast.Try) and child.finalbody and _handler_escapes(child):
-            raise Unsupported("try/finally 的 handler 里 break/continue")
+    # **`try/finally` 的 handler 里 break/continue** ✅ 现在支持了 ✅ ——
+    # break/continue 一律走 `goto cratix_lp_<n>_brk/_cont` ✅（handler 体在函数级也合法 ✅）
 
     # **`with` 多个管理器** ✅ 暂时回退 ✅ —— 第二个管理器的帧记录有问题 ✅
     # （实测：`with A() as a, B() as b:` 段错误 ✅，pitfall #136 ✅）。
