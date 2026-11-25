@@ -59,6 +59,8 @@ class ModuleCompile:
     decorated_functions: list = field(default_factory=list)
     # **源码路径** ✅（`__file__` 保真用 ✅ —— 编译期就知道 ✅）
     source_path: str = ""
+    # **类级回退** ✅（[(顺序, 源码)] ✅）
+    fallback_classes: list = field(default_factory=list)
 
     @property
     def supported_names(self) -> list:
@@ -237,11 +239,18 @@ def _decorator_segment(source: str, node) -> str | None:
 
 
 def _module_level_supported(stmt) -> bool:
-    if isinstance(stmt, ast.Assign):
-        return all(isinstance(t, ast.Name) for t in stmt.targets)
-    if isinstance(stmt, ast.Expr):
-        # 只允许文档字符串 ✅（其它表达式可能有副作用 ✅ -> 整个模块回退 ✅）
-        return isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str)
+    """**模块级语句** ✅ —— 以前只放"简单赋值 + import" ✅，结果**真实模块几乎全被拒** ✅
+    （实测：标准库 20 个模块只有 2 个能过 ✅ —— `if`/`try`/`expr` 全是拦路虎 ✅）。
+
+    现在 ✅：模块体走的是**和函数体同一套**生成器 ✅（`module_gen` ✅），
+    支持的就该让它编 ✅；真不支持的自然会 `Unsupported` -> 退回整模块回退 ✅（语义不变 ✅）。
+    """
+    if isinstance(stmt, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr)):
+        return True
+    if isinstance(stmt, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+        return True
+    if isinstance(stmt, (ast.Assert, ast.Delete)):
+        return True
     if isinstance(stmt, ast.Import):
         return True
     # **`from ... import ...`** ✅ —— 以前这一条不认 ✅ -> 整个模块回退 ✅（真实代码几乎都中招 ✅）
@@ -330,6 +339,35 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         writes.add(target.attr)
         names = sorted(n for n in writes if n.isidentifier() and n not in ("self", "__class__"))
         class_slots_map[stmt.name] = {name: index for index, name in enumerate(names)}
+
+    # **类级回退** ✅ —— 单个类不支持（继承 ✅ / 类体语句 ✅）不该拖垮整个模块 ✅：
+    # 把类源码在模块 init 里 exec 一遍 ✅（语义与源码一致 ✅），其余函数照常 AOT ✅。
+    fallback_classes: list = []
+    class_names = {stmt.name for stmt in tree.body if isinstance(stmt, ast.ClassDef)}
+    # **顺序风险** ✅：类在模块体之后创建 ✅ -> 若模块体里就用到类的名字 ✅ 顺序就错了 ✅
+    def _module_scope_names(node) -> set:
+        """只算**模块级真的会执行**的名字 ✅ —— 不进 def/lambda/class 体 ✅（那里不立刻执行 ✅）。"""
+        found: set = set()
+
+        def walk(item) -> None:
+            for child in ast.iter_child_nodes(item):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                    continue
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    found.add(child.id)
+                walk(child)
+
+        walk(node)
+        return found
+
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        used = _module_scope_names(stmt)
+        if used & class_names:
+            result.module_ok = False
+            result.module_reason = "模块体引用了类（创建顺序无法保证）"
+            return result
 
     # **模块级装饰器** ✅（名字 -> 装饰器表达式 ✅）
     decorated_functs: list = []
@@ -609,6 +647,13 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         try:
             check_class(stmt)
         except Unsupported as exc:
+            # **类级回退** ✅ —— 这个类编译不了 ✅（继承 ✅ / 类体语句 ✅），
+            # 用**源码 exec** ✅ 保住语义 ✅，别的类与函数照常 AOT ✅（不再整个模块回退 ✅）
+            segment = _source_segment(source, stmt)
+            if segment:
+                fallback_classes.append((stmt.lineno, segment))
+                result.plans.append(FunctionPlan(stmt.name, False, exc.reason))
+                continue
             result.module_ok = False
             result.module_reason = exc.reason
             return result
@@ -723,8 +768,17 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     key_names.append(pname)
                 key_names.extend(sorted(gen.global_names))
                 result.plans.append(FunctionPlan(item.name, True, ""))
-            elif isinstance(item, ast.Assign):
-                class_info["attrs"].append((item.targets[0].id, builder.build_expr(item.value)))
+            elif isinstance(item, (ast.Assign, ast.AnnAssign)):
+                # **类属性** ✅（含带注解的 `x: int = 0` ✅ —— 真实代码里到处是 ✅）
+                if isinstance(item, ast.AnnAssign):
+                    if not isinstance(item.target, ast.Name) or item.value is None:
+                        raise Unsupported("类体语句：AnnAssign（无值或非简单名字）")
+                    class_info["attrs"].append((item.target.id, builder.build_expr(item.value)))
+                else:
+                    target = item.targets[0]
+                    if not isinstance(target, ast.Name):
+                        raise Unsupported("类属性赋值目标不是简单名字")
+                    class_info["attrs"].append((target.id, builder.build_expr(item.value)))
         result.classes.append(class_info)
 
     # --- 模块级 body ✅ ---
@@ -752,6 +806,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     result.key_names = key_names
     result.module_gen = module_gen
     result.decorated_functions = decorated_functs
+    result.fallback_classes = fallback_classes
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
     # → stub 的 is_def 判定为假 ✅ → 直接返回模块 ✅ → 模块体已在 init 里执行 ✅
     # → meta.json 标 exec_done ✅ → 引导模块不再调 exec_def ✅（否则会重跑 ✅）。
@@ -768,7 +823,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.func_meta,
         result.genexp_sources,
         result.decorated_functions,
-        source_file=str(path),
+        source_file=result.source_path,
+        fallback_classes=result.fallback_classes,
     )
     result.consts = consts
     return result
@@ -812,6 +868,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             genexps=module_compile.genexp_sources,
             decorated_functions=module_compile.decorated_functions,
             source_file=module_compile.source_path,
+            fallback_classes=module_compile.fallback_classes,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")

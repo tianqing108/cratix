@@ -126,6 +126,15 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             var = build_expr(item.optional_vars) if item.optional_vars is not None else None
             pairs.extend([ctx, var])
         return ir.node("with", *pairs, body=[build_stmt(s) for s in node.body])
+    if isinstance(node, ast.Delete):
+        # **`del` 语句** ✅ —— 先支持"删全局名字" ✅（真实代码里常见：
+        # `try: import x finally: del x` ✅ 之类 ✅）
+        names = []
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                raise Unsupported("del 目标不是简单名字")
+            names.append(target.id)
+        return ir.node("delete", names=names)
     if isinstance(node, (ast.Global, ast.Nonlocal)):
         # **`global` / `nonlocal` 声明** ✅ —— 运行期**没有动作** ✅：
         # 作用域分析已经把这些名字从"局部"里剔除 ✅ -> 赋值自然走模块字典 ✅。

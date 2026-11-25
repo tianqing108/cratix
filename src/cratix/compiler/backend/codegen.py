@@ -412,7 +412,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  key_names: list, module_gen=None, alias_init: str | None = None,
                                  fallback_code: dict | None = None, classes: list | None = None,
                                  consts=None, func_meta=None, genexps=None,
-                                 decorated_functions=None, source_file="") -> str:
+                                 decorated_functions=None, source_file="",
+                                 fallback_classes=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -496,6 +497,13 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **模块体先跑** ✅ —— 装饰器名往往来自模块体的 import ✅（实测：先套装饰器会 NameError ✅）
     if module_gen is not None:
         out.extend(body_lines)
+    # **类级回退** ✅ —— 不支持的类用**源码 exec** ✅（顺序与 AOT 类一致 ✅：模块体之后 ✅）
+    for _order, class_source in sorted(fallback_classes or []):
+        out.append("    {")
+        out.append("        PyObject *cratix_cls_src = PyRun_String(" + c_string(class_source) + ", Py_file_input, cratix_globals, cratix_globals);")
+        out.append("        if (cratix_cls_src == NULL) return -1;")
+        out.append("        Py_DECREF(cratix_cls_src);")
+        out.append("    }")
     # **模块级装饰器** ✅ —— 原生实现已经是模块属性 ✅；造一个 **Python 跳板** ✅
     # （把原生函数绑成私有名 ✅ 避免自引用递归 ✅），套上装饰器 ✅ 再换回公开名 ✅。
     for func_name, decorator_sources in (decorated_functions or []):
@@ -1938,11 +1946,21 @@ class FunctionGen:
             return
         if kind == "pass" or kind == "noop":
             return
+        if kind == "delete":
+            # **`del name`** ✅ —— 只支持**模块全局** ✅（局部删除要 UnboundLocal 语义 ✅ —— 暂不支持 ✅）
+            for name in node.get("names", []):
+                if name in self.scope.locals_:
+                    raise Unsupported("del 局部变量")
+                self.emit("if (PyDict_DelItemString(cratix_globals, " + c_string(name) + ") < 0) goto cratix_error;")
+            return
         if kind == "funcdef":
             # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）
             self.emit_inner_def(node)
             return
         if kind == "raise":
+            # **裸 `raise`（重抛当前异常）** ✅ —— 需要"当前异常"的稳定存储 ✅（还没做 ✅）-> 明确回退 ✅
+            if not node.kids or node.kids[0] is None:
+                raise Unsupported("裸 raise（重抛当前异常）")
             t = self.emit_expr(node.kids[0])
             self.emit("cratix_raise(" + t + ");")
             self.emit("goto cratix_error;")

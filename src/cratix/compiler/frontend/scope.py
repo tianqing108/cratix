@@ -134,21 +134,57 @@ def module_bindings(tree: ast.Module) -> set:
      -> 把 `Ctx` 当成闭包自由变量 ✅ -> 误判为不可 AOT ✅。）
     """
     names: set = set()
-    for stmt in tree.body:
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
-        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-            names.add(stmt.target.id)
-        elif isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                names.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(stmt, ast.ImportFrom):
-            for alias in stmt.names:
-                names.add(alias.asname or alias.name)
-        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(stmt.name)
+    def collect(statements) -> None:
+        for stmt in statements:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+                    elif isinstance(target, (ast.Tuple, ast.List)):
+                        for sub in target.elts:
+                            if isinstance(sub, ast.Name):
+                                names.add(sub.id)
+            elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                names.add(stmt.target.id)
+            elif isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+                names.add(stmt.target.id)
+            elif isinstance(stmt, ast.For):
+                if isinstance(stmt.target, ast.Name):
+                    names.add(stmt.target.id)
+                collect(stmt.body)
+                collect(stmt.orelse)
+            elif isinstance(stmt, ast.While):
+                collect(stmt.body)
+                collect(stmt.orelse)
+            elif isinstance(stmt, ast.If):
+                collect(stmt.body)
+                collect(stmt.orelse)
+            elif isinstance(stmt, ast.Try):
+                collect(stmt.body)
+                for handler in stmt.handlers:
+                    if handler.name:
+                        names.add(handler.name)
+                    collect(handler.body)
+                collect(stmt.orelse)
+                collect(stmt.finalbody)
+            elif isinstance(stmt, ast.With):
+                for item in stmt.items:
+                    if item.optional_vars is not None and isinstance(item.optional_vars, ast.Name):
+                        names.add(item.optional_vars.id)
+                collect(stmt.body)
+            elif isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    names.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(stmt, ast.ImportFrom):
+                for alias in stmt.names:
+                    names.add(alias.asname or alias.name)
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(stmt.name)
+
+    # **模块级控制流里的绑定也算模块全局** ✅ ——
+    # 以前只看 `tree.body` 的第一层 ✅ -> `try: import x` / `if cond: LIMIT = 10` 里的名字
+    # 被当成**闭包自由变量** ✅ -> 用到它们的函数整函数回退 ✅（实测 ✅）。
+    collect(tree.body)
     return names
 
 

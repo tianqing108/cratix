@@ -143,6 +143,22 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_module_level(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_module_level.py", "cratix_corpus_module_level", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "module_ok": mc.module_ok,
+        "fallback_classes": [src.splitlines()[0] for _order, src in mc.fallback_classes],
+        "limit": mod.limit_value(),
+        "registry": mod.registry_size(),
+        "caught": mod.raise_and_catch(7),
+        "base_ok": mod.basename_of("/a/b.txt"),
+        "dropped": mod.drop_temp(),
+        "temp_gone": not hasattr(mod, "_TEMP"),
+    }
+
+
 def op_unpack(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_unpack.py", "cratix_corpus_unpack", out_dir)
     short = None
@@ -420,6 +436,8 @@ def main() -> int:
             data = op_genexp_capture(out_dir)
         elif op == "unpack":
             data = op_unpack(out_dir)
+        elif op == "module_level":
+            data = op_module_level(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

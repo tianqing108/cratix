@@ -284,6 +284,22 @@ class FunctionFallbackTest(unittest.TestCase):
         # 元素不够 -> ValueError ✅（与 CPython 一致 ✅）
         self.assertEqual(data["short"], "ValueError")
 
+    def test_19_module_level_statements(self):
+        """**模块级语句** ✅（if/try/expr/del ✅）+ **类级回退** ✅（继承的类走源码 ✅）。"""
+        data = run_worker("module_level")
+        self.assertTrue(data["module_ok"])
+        # 继承的类不回退整个模块 ✅ —— 只是这个类走源码 exec ✅
+        self.assertTrue(data["fallback_classes"], "继承的类应当走类级回退")
+        for name in ("limit_value", "registry_size", "raise_and_catch", "basename_of", "drop_temp"):
+            self.assertIn(name, data["supported"], name + " 应当被 AOT 化")
+        self.assertEqual(data["limit"], 10)
+        self.assertEqual(data["registry"], 1)
+        # 异常类来自**源码 exec** ✅ -> 捕获照常工作 ✅
+        self.assertEqual(data["caught"], 7)
+        self.assertEqual(data["base_ok"], "b.txt")
+        self.assertEqual(data["dropped"], "dropped")
+        self.assertTrue(data["temp_gone"], "del 之后全局应当真的没了")
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

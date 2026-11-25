@@ -30,7 +30,7 @@ UNSUPPORTED_NODES = {
 
     ast.Match: "match 语句",
     ast.Nonlocal: "nonlocal 声明",
-    ast.Delete: "del 语句",
+    # ast.Delete：**已支持** ✅（只支持删名字 ✅ —— 见下面的细化检查 ✅）
     # **`from ... import ...`** ✅ 已支持 ✅（模块级/函数级同一套生成 ✅）
 }
 
@@ -75,8 +75,9 @@ def check_function(node: ast.FunctionDef, scope) -> None:
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:
             raise Unsupported(reason)
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Del):
-            raise Unsupported("del 语句")
+        # **`del name`** ✅ 已支持 ✅（删全局 ✅）；`del obj.attr` / `del d[k]` 还不支持 ✅
+        if isinstance(child, ast.Delete) and not all(isinstance(t, ast.Name) for t in child.targets):
+            raise Unsupported("del 属性/下标")
         # **嵌套 def** ✅ 已支持 ✅（cell 字典 + functools.partial ✅）；
         # 没登记的嵌套 def 会在 codegen 里被判回退 ✅（语义仍正确 ✅）。
         if isinstance(child, (ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:
