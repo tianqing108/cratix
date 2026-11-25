@@ -28,7 +28,7 @@ UNSUPPORTED_NODES = {
     ast.Await: "await",
     # 类定义单独校验 ✅（见 check_class ✅）
 
-    ast.Match: "match 语句",
+    # ast.Match：已支持 ✅（字面量/单例/捕获/通配/或 + guard ✅；结构模式回退 ✅）
     ast.Nonlocal: "nonlocal 声明",
     # ast.Delete：**已支持** ✅（只支持删名字 ✅ —— 见下面的细化检查 ✅）
     # **`from ... import ...`** ✅ 已支持 ✅（模块级/函数级同一套生成 ✅）

@@ -1180,6 +1180,8 @@ class FunctionGen:
         self.genexp_sources: dict = {}
         # **裸 raise 需要"当前异常"** ✅（用到才声明 ✅）
         self.needs_cur_exc = False
+        # **match 语句的标签编号** ✅
+        self.match_index = 0
         # **模块体控制流里的类** ✅（(行, 列) -> 源码 ✅）
         self.inline_class_sources: dict = {}
         # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
@@ -1420,6 +1422,89 @@ class FunctionGen:
         for name in sorted(self.cell_names & set(self.scope.params)):
             var = self.local_var(name)
             self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", " + var + ") < 0) goto cratix_error;")
+
+    def emit_match(self, node) -> None:
+        """**match 语句** ✅ —— 支持字面量 / 单例 / 捕获 / 通配 / 或 ✅ + guard ✅。
+
+        结构模式（序列/映射/类）在 builder 里就回退了 ✅（语义正确 ✅ 只是不加速 ✅）。
+        """
+        subject = self.emit_expr(node.kids[0])
+        index = self.match_index
+        self.match_index += 1
+        done = "cratix_match_done_" + str(index)
+        end = "cratix_match_end_" + str(index)
+        for case in node.get("cases", []):
+            cond = self._match_condition(case["pattern"], subject)
+            if cond is None:
+                # **通配 / 纯捕获** ✅ -> 命中 ✅（guard 不成立就整体结束 ✅ —— 与 Python 一致 ✅）
+                self._match_bind(case["pattern"], subject)
+                if case["guard"] is not None:
+                    # **guard 不成立时要继续试下一个 case** ✅（Python 语义 ✅）
+                    guard = self.emit_expr(case["guard"])
+                    self.emit("if (cratix_truth(" + guard + ")) {")
+                    for stmt in case["body"]:
+                        self.emit_stmt(stmt)
+                    self.emit("    goto " + done + ";")
+                    self.emit("}")
+                    continue
+                for stmt in case["body"]:
+                    self.emit_stmt(stmt)
+                self.emit("goto " + done + ";")
+                break
+            self.emit("if (" + cond + ") {")
+            self._match_bind(case["pattern"], subject)
+            if case["guard"] is not None:
+                guard = self.emit_expr(case["guard"])
+                self.emit("    if (cratix_truth(" + guard + ")) {")
+                for stmt in case["body"]:
+                    self.emit_stmt(stmt)
+                self.emit("        goto " + done + ";")
+                self.emit("    }")
+            else:
+                for stmt in case["body"]:
+                    self.emit_stmt(stmt)
+                self.emit("    goto " + done + ";")
+            self.emit("}")
+        self.emit(end + ": ;")
+        self.emit(done + ": ;")
+
+    def _match_condition(self, pattern, subject):
+        """返回一个 C 布尔表达式 ✅；通配/捕获返回 None ✅（无条件命中 ✅）。"""
+        kind, payload = pattern
+        if kind == "capture":
+            return None
+        if kind == "value":
+            other = self.emit_expr(payload)
+            tmp = self.new_tmp()
+            self.emit(tmp + " = PyObject_RichCompare(" + subject + ", " + other + ", Py_EQ);")
+            self.emit("if (" + tmp + " == NULL) goto cratix_error;")
+            return "cratix_truth(" + tmp + ")"
+        if kind == "singleton":
+            # **单例** ✅：`None`/`True`/`False` 是**单例对象** ✅ -> 指针比较就是 `is` ✅
+            name = {None: "Py_None", True: "Py_True", False: "Py_False"}[payload]
+            return "(" + subject + " == " + name + ")"
+        if kind == "or":
+            parts = []
+            for sub in payload:
+                cond = self._match_condition(sub, subject)
+                if cond is None:
+                    return None
+                parts.append("(" + cond + ")")
+            return " || ".join(parts)
+        raise Unsupported("match 条件")
+
+    def _match_bind(self, pattern, subject) -> None:
+        kind, payload = pattern
+        if kind == "capture" and payload:
+            value = self.new_tmp()
+            self.emit(value + " = " + subject + ";")
+            self.emit("Py_INCREF(" + value + ");")
+            self.emit_assign(_name_node(payload), value)
+        elif kind == "or":
+            for sub in payload:
+                if sub[0] == "capture" and sub[1]:
+                    self._match_bind(sub, subject)
+                    break
 
     def emit_inner_def(self, node) -> None:
         """**嵌套 def** ✅ —— 取模块级原生函数 ✅，有捕获就 `functools.partial(fn, cells)` ✅。"""
@@ -2104,6 +2189,9 @@ class FunctionGen:
             self.emit("continue;")
             return
         if kind == "pass" or kind == "noop":
+            return
+        if kind == "match":
+            self.emit_match(node)
             return
         if kind == "delete":
             # **`del name`** ✅ —— 只支持**模块全局** ✅（局部删除要 UnboundLocal 语义 ✅ —— 暂不支持 ✅）

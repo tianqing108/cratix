@@ -126,6 +126,10 @@ def build_stmt(node: ast.stmt) -> ir.Node:
             var = build_expr(item.optional_vars) if item.optional_vars is not None else None
             pairs.extend([ctx, var])
         return ir.node("with", *pairs, body=[build_stmt(s) for s in node.body])
+    if isinstance(node, ast.Match):
+        # **match 语句** ✅ —— 只支持字面量/捕获/通配/或 ✅（结构模式回退 ✅）
+        built = build_match(node)
+        return ir.node("match", built["subject"], cases=built["cases"])
     if isinstance(node, ast.Delete):
         # **`del`** ✅：名字（删全局 ✅）/ 属性 ✅ / 下标 ✅ 都支持 ✅
         names = []
@@ -228,6 +232,32 @@ def build_function(node: ast.FunctionDef) -> dict:
         "params": build_params(node.args),
         "body": [build_stmt(stmt) for stmt in node.body],
     }
+
+
+def _match_pattern(node):
+    """**match 模式** ✅ —— 只支持"没有结构解构"的那些 ✅（其余回退 ✅）。"""
+    if isinstance(node, ast.MatchValue):
+        return ("value", build_expr(node.value))
+    if isinstance(node, ast.MatchSingleton):
+        return ("singleton", node.value)
+    if isinstance(node, ast.MatchAs):
+        if node.pattern is not None:
+            raise Unsupported("match 的 as 子模式")
+        return ("capture", node.name)
+    if isinstance(node, ast.MatchOr):
+        return ("or", [_match_pattern(item) for item in node.patterns])
+    raise Unsupported("match 模式：" + type(node).__name__)
+
+
+def build_match(node: ast.Match):
+    cases = []
+    for case in node.cases:
+        cases.append({
+            "pattern": _match_pattern(case.pattern),
+            "guard": build_expr(case.guard) if case.guard is not None else None,
+            "body": [build_stmt(stmt) for stmt in case.body],
+        })
+    return {"subject": build_expr(node.subject), "cases": cases}
 
 
 def build_lambda(node: ast.Lambda) -> dict:

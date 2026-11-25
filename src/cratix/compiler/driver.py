@@ -641,6 +641,10 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             continue
         scope = analyze_function(stmt, module_globals)
         try:
+            # **模块级函数没有外层作用域** ✅ -> 它读到的"自由名"**只可能是全局** ✅
+            # （以前把这些名字当成"闭包捕获" ✅ -> 整个函数回退 ✅ —— 实测 `calendar.py` 的
+            #  `FEBRUARY`（`globals().update(...)` 动态绑定 ✅）就中招 ✅）
+            scope.free = set()
             # **模块级装饰器走函数级回退** ✅ ——
             # 原生函数是 PyCFunction ✅（没有 __dict__ ✅）✅ -> functools.wraps 之类会在它上面失败 ✅；
             # 回退路径在模块字典里 exec 源码 ✅ -> 装饰器**原样生效** ✅（无静默语义偏差 ✅）。
@@ -778,6 +782,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                     if segments:
                         class_info["method_decorators"][item.name] = segments
                 method_scope = analyze_function(item, module_globals)
+                # **方法也一样** ✅：方法**看不见类作用域** ✅（Python 语义 ✅）-> 自由名就是全局 ✅
+                method_scope.free = set()
                 try:
                     check_function(item, method_scope)
                     built = builder.build_stmt(item)

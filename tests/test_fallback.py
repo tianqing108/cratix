@@ -356,6 +356,16 @@ class FunctionFallbackTest(unittest.TestCase):
         # if 里的类按源码顺序就地创建 ✅
         self.assertEqual(data["impl"], "fast")
 
+    def test_25_match_statement(self):
+        """**match** ✅（字面量/单例/捕获/通配/或 + guard ✅，guard 不成立要继续试 ✅）。"""
+        data = run_worker("match")
+        self.assertEqual(data["fallback"], [])
+        self.assertEqual(data["classify"], ["zero", "small", "small", "none", "other:7"])
+        # **guard 失败必须落到下一个 case** ✅（以前直接结束 ✅ -> 返回 None ✅）
+        self.assertEqual(data["guards"], ["zero", "small", "big"])
+        self.assertEqual(data["block"], [0, 6, 99])
+        self.assertEqual(data["nested"], ["zero-true", "zero-false", "other"])
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

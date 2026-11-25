@@ -41,6 +41,7 @@ KIND_FIELDS = {
     "with": ("body",),                       # kids: [ctx, vars|None] 成对 ✅
     "funcdef": ("name", "params", "flags", "body", "key"),
     "classdef": ("name", "bases", "body", "key"),
+    "match": ("cases",),                    # match 语句 ✅ kids: [subject] ✅
     # --- 参数 ---
     "params": ("names", "defaults", "kwdefaults", "kwonly", "vararg", "kwarg"),
     # --- 表达式 ---

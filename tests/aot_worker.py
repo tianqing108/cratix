@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_match(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_match.py", "cratix_corpus_match", out_dir)
+    return {
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "classify": [mod.classify(v) for v in (0, 1, 2, None, 7)],
+        "guards": [mod.guard_case(v) for v in (0, 5, 20)],
+        "block": [mod.with_block(v) for v in (0, 3, 8)],
+        "nested": [mod.nested_match(0, True), mod.nested_match(0, False), mod.nested_match(1, True)],
+    }
+
+
 def op_module_forms(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_module_forms.py", "cratix_corpus_module_forms", out_dir)
     return {
@@ -510,6 +522,8 @@ def main() -> int:
             data = op_robust(out_dir)
         elif op == "module_forms":
             data = op_module_forms(out_dir)
+        elif op == "match":
+            data = op_match(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

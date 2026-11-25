@@ -142,6 +142,14 @@ stub 通过**加载桥**装载 ✅（`cratix_loader.load(entry, init, spec)` ✅
 | 36 | 建类时 `NameError`（装饰器还没定义 ✅） | 回退函数在**类创建之后**才安装 ✅ | 把回退安装**提到建类之前** ✅ |
 | 37 | 类方法回退 `IndentationError` ✅ | 类体里的方法源码**带缩进** ✅ → 直接 exec ✅ | 回退片段 **dedent** ✅ |
 
+## 追加：模块级函数没有闭包 + match ✅
+
+| # | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 114 | `calendar.py` / `http/client.py` 里一堆函数被判"闭包捕获"✅（`FEBRUARY` ✅ / `CONTINUE` ✅） | 那些名字是 `globals().update(Enum.__members__)` **动态绑定**的 ✅ -> 静态分析看不见 ✅ -> 被算成自由变量 ✅ | **模块级函数与方法没有外层作用域** ✅ -> 它们的"自由名"只可能是全局 ✅ -> 清空 free ✅（真闭包只可能出现在嵌套 def/lambda ✅） |
+| 115 | `case n if n > 10:` 的 guard 不成立时直接结束 ✅（返回 None ✅） | 捕获模式的实现无条件 `goto done` ✅ | guard 不成立要**继续试下一个 case** ✅（Python 语义 ✅） |
+| 116 | `match` 编译报 `C2094: 未定义的标签` ✅ | 通配分支提前 `return` ✅ -> 后面那个 `goto done` 的标签没发出来 ✅ | 改成单一出口 ✅：通配分支也 `goto done` ✅，标签统一在最后发 ✅ |
+
 ## 追加：`import *` 与模块体控制流里的类 ✅
 
 | # | 现象 | 根因 | 修法 |
