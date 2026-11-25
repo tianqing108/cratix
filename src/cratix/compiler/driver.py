@@ -273,6 +273,23 @@ def _decorator_segment(source: str, node) -> str | None:
     return textwrap.dedent(segment).strip()
 
 
+def _int_safe(func_node, scope) -> set:
+    """**哪些局部可以只用 int64 表示** ✅（intflow 分析 ✅ —— 出任何问题都返回空集 ✅）。"""
+    try:
+        # **函数里定义类** ✅ -> 一律不优化 ✅：类工厂/类体会以**对象**形式间接访问局部 ✅，
+        # 只留 C 值会让它们看到旧值 ✅（实测：局部类测试崩溃 ✅）。
+        import ast as _ast
+
+        for sub in _ast.walk(func_node):
+            if isinstance(sub, _ast.ClassDef):
+                return set()
+        from .intflow import analyze_int_locals
+
+        return set(analyze_int_locals(func_node, scope.locals_)["safe"])
+    except Exception:  # noqa: BLE001 - 分析失败就不优化 ✅ 绝不能影响正确性 ✅
+        return set()
+
+
 def _module_level_supported(stmt) -> bool:
     """**模块级语句** ✅ —— 以前只放"简单赋值 + import" ✅，结果**真实模块几乎全被拒** ✅
     （实测：标准库 20 个模块只有 2 个能过 ✅ —— `if`/`try`/`expr` 全是拦路虎 ✅）。
@@ -926,6 +943,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                 lambda_names=lambda_names,
                 lambda_captures=lambda_captures,
                 cell_names=inner_cells.get(stmt.name, set()),
+                int_safe=_int_safe(stmt, scope),
                 cells_only=inner_written.get(stmt.name, set()),
                 inner_sites=inner_sites,
                 genexp_captures=genexp_captures,
@@ -1078,6 +1096,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                         lambda_names=lambda_names,
                         lambda_captures=lambda_captures,
                         cell_names=inner_cells.get(item.name, set()),
+                    int_safe=_int_safe(item, method_scope),
                     cells_only=inner_written.get(stmt.name, set()),
                         inner_sites=inner_sites,
                         genexp_captures=genexp_captures,

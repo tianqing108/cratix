@@ -1213,7 +1213,7 @@ class FunctionGen:
                  known_classes=None, enclosing_class=None, package="", lambda_names=None,
                  cell_names=None, inner_sites=None, closure_names=None, lambda_captures=None,
                  genexp_captures=None, deleted_locals=None, mdef_names=None,
-                 cells_only=None):
+                 cells_only=None, int_safe=None):
         # **所在模块的包名** ✅（相对导入要解析成绝对名 ✅）
         self.package = package or ""
         # **lambda 名字表** ✅（(行, 列) -> 模块级函数名 ✅）
@@ -1228,8 +1228,15 @@ class FunctionGen:
         self.closure_names = set(closure_names or ())
         # **只住 cell 字典的名字** ✅（被内层 `nonlocal` 写过 ✅）—— 读/写都走字典 ✅
         self.cells_only: set = set(cells_only or ())
-        # **只住 cell 字典的名字** ✅（被内层 `nonlocal` 写过 ✅）—— 外层读/写都要走字典 ✅
-        self.cells_only: set = set(cells_only or ())
+        # **可以只用 int64 表示的局部** ✅（来自 intflow 分析 ✅）—— 见 #160 ✅
+        # **住 cell 字典的名字不参与** ✅ —— cell 里存的是**对象** ✅，
+        # 只留 C 值会让内层/闭包看到旧值或 `None` ✅（实测：闭包测试全挂 ✅）。
+        self.int_safe: set = set(int_safe or ()) - self.cell_names - self.cells_only - self.closure_names
+        # **结构性复杂就不优化** ✅ —— 嵌套 def / lambda 捕获 / 推导式捕获 / 类工厂 都会
+        # 以"对象"形式间接访问局部 ✅，只留 C 值会让它们看到旧值 ✅（实测崩溃 ✅）。
+        if self.inner_sites or self.lambda_captures or self.genexp_captures:
+            self.int_safe = set()
+        self.int64_index = 0
         self.cells_var = ""
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
@@ -1464,6 +1471,97 @@ class FunctionGen:
             self.label_index += 1
 
     # ---------- 赋值 ----------
+    def int_iv(self, name: str) -> str:
+        """不装箱整数的 **C 值** 变量名 ✅（函数顶部 long long 声明 ✅）。"""
+        var = "cratix_iv_" + c_ident(name)
+        if var not in self.int64_helpers:
+            self.int64_helpers.append(var)
+        return var
+
+    def int_ib(self, name: str) -> str:
+        """不装箱整数的 **tag** 变量名 ✅（1 = C 值有效 ✅）。"""
+        var = "cratix_ib_" + c_ident(name)
+        if var not in self.int_helpers:
+            self.int_helpers.append(var)
+        return var
+
+    def new_int64_helper(self) -> str:
+        name = "cratix_i64_" + str(self.int64_index)
+        self.int64_index += 1
+        self.int64_helpers.append(name)
+        return name
+
+    def emit_int_assign(self, name: str, value_node) -> None:
+        """**不装箱的整数赋值** ✅ —— C 值路径 ✅ + **溢出/不可判时**退回装箱 ✅。
+
+        两条路都**只算一遍可能出错的部分** ✅：RHS 全是纯整数表达式 ✅（intflow 已保证 ✅），
+        所以溢出时可以**安全地重算**一次装箱版本 ✅。
+        """
+        iv = self.int_iv(name)
+        ib = self.int_ib(name)
+        var = self.local_var(name)
+        ok, val = self.emit_int_value(value_node)
+        self.emit("if (" + ok + ") {")
+        self.emit("    " + iv + " = " + val + ";")
+        self.emit("    " + ib + " = 1;")
+        self.emit("    Py_CLEAR(" + var + ");")
+        self.emit("} else {")
+        saved = self.lines
+        self.lines = []
+        boxed = self.emit_expr(value_node)
+        inner = self.lines
+        self.lines = saved
+        for line in inner:
+            self.emit("    " + line)
+        self.emit("    Py_XSETREF(" + var + ", " + boxed + ");")
+        self.emit("    " + boxed + " = NULL;")
+        self.emit("    " + ib + " = 0;")
+        self.emit("}")
+        if name in self.cell_names and self.cells_var:
+            self.emit("if (PyDict_SetItemString(" + self.cells_var + ", " + c_string(name) + ", "
+                      + var + " != NULL ? " + var + " : Py_None) < 0) goto cratix_error;")
+
+    def emit_int_value(self, node):
+        """把 `node` 算成一个 **C 的 long long** ✅ —— 返回 `(ok_var, val_var)` ✅。
+
+        `ok_var` 为 0 表示"**这次不能用 C 值**" ✅（操作数不在 tag 里 ✅ 或**溢出** ✅）——
+        调用方必须走**装箱回退** ✅（这样语义与解释器一致 ✅）。
+        只支持常量 ✅ / int-safe 名字 ✅ / 一元负号 ✅ / `+` `-` ✅（乘法有溢出歧义 ✅ 先不做 ✅）。
+        """
+        ok = self.new_int_helper()
+        val = self.new_int64_helper()
+        kind = node.kind
+        if kind == "const" and isinstance(node.get("value"), int) and not isinstance(node.get("value"), bool):
+            self.emit(ok + " = 1;")
+            self.emit(val + " = " + str(node.get("value")) + "LL;")
+            return ok, val
+        if kind == "name" and node.get("id") in self.int_safe:
+            self.emit(ok + " = " + self.int_ib(node.get("id")) + ";")
+            self.emit(val + " = " + self.int_iv(node.get("id")) + ";")
+            return ok, val
+        if kind == "unaryop" and node.get("op") == "-" and node.kids:
+            inner_ok, inner_val = self.emit_int_value(node.kids[0])
+            self.emit(ok + " = " + inner_ok + ";")
+            self.emit(val + " = -" + inner_val + ";")
+            self.emit("if (" + inner_val + " == (-9223372036854775807LL - 1)) " + ok + " = 0;")
+            return ok, val
+        if kind == "binop" and node.get("op") in ("+", "-"):
+            left_ok, left_val = self.emit_int_value(node.kids[0])
+            right_ok, right_val = self.emit_int_value(node.kids[1])
+            self.emit("if (" + left_ok + " && " + right_ok + ") {")
+            if node.get("op") == "+":
+                self.emit("    " + val + " = " + left_val + " + " + right_val + ";")
+                self.emit("    " + ok + " = !((" + left_val + " > 0 && " + right_val + " > 0 && " + val + " < 0)"
+                          + " || (" + left_val + " < 0 && " + right_val + " < 0 && " + val + " >= 0));")
+            else:
+                self.emit("    " + val + " = " + left_val + " - " + right_val + ";")
+                self.emit("    " + ok + " = !((" + right_val + " > 0 && " + val + " > " + left_val + ")"
+                          + " || (" + right_val + " < 0 && " + val + " < " + left_val + "));")
+            self.emit("} else { " + ok + " = 0; }")
+            return ok, val
+        self.emit(ok + " = 0;")
+        return ok, val
+
     def emit_value_into(self, dest: str, node) -> None:
         """把表达式的值放进 dest ✅（转移所有权 ✅）。"""
         t = self.emit_expr(node)
@@ -2161,7 +2259,10 @@ class FunctionGen:
         self.emit("while (1) {")
         self.emit("    if (" + fast + ") {")
         self.emit("        if (" + step + " > 0 ? " + cur + " >= " + stop + " : " + cur + " <= " + stop + ") break;")
-        self.emit("        " + item + " = PyLong_FromLongLong(" + cur + ");")
+        # **本轮的计数值** ✅ —— 先存一份 ✅ 再自增 ✅（不装箱路径要用它 ✅）
+        ival = self.new_int64_helper()
+        self.emit("        " + ival + " = " + cur + ";")
+        self.emit("        " + item + " = PyLong_FromLongLong(" + ival + ");")
         self.emit("        if (" + item + " == NULL) goto cratix_error;")
         self.emit("        " + cur + " += " + step + ";")
         self.emit("    } else {")
@@ -2169,6 +2270,15 @@ class FunctionGen:
         self.emit("        if (" + item + " == NULL) { if (PyErr_Occurred()) goto cratix_error; break; }")
         self.emit("    }")
         self.emit_assign(node.kids[0], item)
+        target = node.kids[0]
+        if target.kind == "name" and target.get("id") in self.int_safe:
+            # **循环变量也走 tag** ✅ —— 快路径直接拿 C 值 ✅（省掉每轮一次装箱 ✅）；
+            # 慢路径把对象解回 int64 ✅（解不出来就标成装箱 ✅）。
+            nm = target.get("id")
+            iv, ib = self.int_iv(nm), self.int_ib(nm)
+            self.emit("    if (" + fast + ") { " + iv + " = " + ival + "; " + ib + " = 1; }")
+            self.emit("    else { " + iv + " = PyLong_AsLongLong(" + self.local_var(nm) + "); "
+                      + ib + " = !(" + iv + " == -1 && PyErr_Occurred()); if (!" + ib + ") PyErr_Clear(); }")
         for stmt in node.get("body", []):
             self.emit_stmt(stmt)
         self.emit("    ")
@@ -2357,9 +2467,15 @@ class FunctionGen:
             self.emit(t + " = NULL;")
             return
         if kind == "assign":
+            targets = node.get("targets", [])
+            # **单目标 + int-safe** ✅ -> 走不装箱路径 ✅（不建对象 ✅ 除非溢出 ✅）
+            if (len(targets) == 1 and targets[0].kind == "name"
+                    and targets[0].get("id") in self.int_safe):
+                self.emit_int_assign(targets[0].get("id"), node.kids[0])
+                return
             value = self.emit_expr(node.kids[0])
             self.track_local_type(node)
-            for target in node.get("targets", []):
+            for target in targets:
                 self.emit_assign(target, value)
             return
         if kind == "augassign":
@@ -2792,6 +2908,13 @@ class FunctionGen:
             if comp_var is not None:
                 self.emit(t + " = " + comp_var + ";")
                 self.emit("Py_XINCREF(" + t + ");")
+                return t
+            if name in self.int_safe:
+                # **不装箱的整数** ✅：tag 为真时从 C 值现造 ✅，否则用装箱副本 ✅
+                _iv = self.int_iv(name)
+                _ib = self.int_ib(name)
+                self.emit("if (" + _ib + ") { " + t + " = PyLong_FromLongLong(" + _iv + "); }")
+                self.emit("else { " + t + " = " + self.local_var(name) + "; Py_INCREF(" + t + "); }")
                 return t
             if name in self.closure_names or name in self.cells_only:
                 # **闭包自由变量** ✅ —— 从 cell 字典读 ✅（晚绑定 ✅）
