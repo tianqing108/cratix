@@ -366,6 +366,17 @@ class FunctionFallbackTest(unittest.TestCase):
         self.assertEqual(data["block"], [0, 6, 99])
         self.assertEqual(data["nested"], ["zero-true", "zero-false", "other"])
 
+    def test_26_local_classes(self):
+        """**函数体里的类** ✅：不捕获外层局部的能 AOT ✅，捕获的整函数回退 ✅（语义正确 ✅）。"""
+        data = run_worker("local_class")
+        self.assertTrue(data["module_ok"], "编译器不该因为函数里的类崩掉")
+        self.assertIn("local_class_only", data["supported"])
+        self.assertIn("class_from_module_globals", data["supported"])
+        self.assertEqual(data["fallback"], ["capturing_class_falls_back"])
+        self.assertEqual(data["local_only"], 3)
+        self.assertEqual(data["from_globals"], 20)
+        self.assertEqual(data["capturing"], 3)
+
     def test_03_fallback_functions_work_at_runtime(self):
         data = run_worker("fallback")
         self.assertEqual(data["gen"], [0, 1, 2])

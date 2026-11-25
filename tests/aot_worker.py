@@ -143,6 +143,18 @@ def op_decorators(out_dir: Path) -> dict:
     }
 
 
+def op_local_class(out_dir: Path) -> dict:
+    mc, mod = _compile("corpus_local_class.py", "cratix_corpus_local_class", out_dir)
+    return {
+        "module_ok": mc.module_ok,
+        "supported": sorted(mc.supported_names),
+        "fallback": sorted(mc.fallback_names),
+        "local_only": mod.local_class_only(),
+        "from_globals": mod.class_from_module_globals(),
+        "capturing": mod.capturing_class_falls_back(),
+    }
+
+
 def op_match(out_dir: Path) -> dict:
     mc, mod = _compile("corpus_match.py", "cratix_corpus_match", out_dir)
     return {
@@ -524,6 +536,8 @@ def main() -> int:
             data = op_module_forms(out_dir)
         elif op == "match":
             data = op_match(out_dir)
+        elif op == "local_class":
+            data = op_local_class(out_dir)
         else:
             raise SystemExit("未知操作：" + op)
     except BaseException as exc:  # noqa: BLE001

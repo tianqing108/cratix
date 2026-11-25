@@ -2213,11 +2213,23 @@ class FunctionGen:
                     raise Unsupported("del 目标：" + target.kind)
             return
         if kind == "classdef":
-            # **模块体控制流里的类** ✅ —— 源码 exec 到模块字典 ✅（绑定行为与源码一致 ✅）
+            # **就地 exec 的类** ✅（模块体控制流里 / 函数体里 ✅）——
+            # exec 到模块字典会绑定**全局** ✅ -> 在函数里必须再搬进**局部**并删掉全局 ✅（语义一致 ✅）
             source_text = (self.inline_class_sources or {}).get(node.get("key"))
             if not source_text:
-                raise Unsupported("类定义（模块体控制流里，取不到源码）")
+                raise Unsupported("类定义（就地 exec，取不到源码）")
             self.emit("if (PyRun_String(" + c_string(source_text) + ", Py_file_input, cratix_globals, cratix_globals) == NULL) goto cratix_error;")
+            cls_name = node.get("name")
+            if self.func_name != "<module>" and cls_name in self.scope.locals_:
+                tmp = self.new_tmp()
+                self.emit(tmp + " = PyDict_GetItemString(cratix_globals, " + c_string(cls_name) + ");")
+                self.emit("if (" + tmp + " == NULL) { PyErr_SetString(PyExc_NameError, \"cratix: class exec missing\"); goto cratix_error; }")
+                self.emit("Py_INCREF(" + tmp + ");")
+                self.emit("if (PyDict_DelItemString(cratix_globals, " + c_string(cls_name) + ") < 0) { Py_DECREF(" + tmp + "); goto cratix_error; }")
+                var = self.local_var(cls_name)
+                self.emit("Py_XDECREF(" + var + ");")
+                self.emit(var + " = " + tmp + ";")
+                self.emit(tmp + " = NULL;")
             return
         if kind == "funcdef":
             # **函数体里的嵌套 def** ✅（模块级/类方法的 def 不进这里 ✅）

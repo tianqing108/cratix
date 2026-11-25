@@ -82,7 +82,8 @@ def check_function(node: ast.FunctionDef, scope) -> None:
         # **`del`** ✅：名字 / 属性 / 下标都支持 ✅（见 builder ✅）
         # **嵌套 def** ✅ 已支持 ✅（cell 字典 + functools.partial ✅）；
         # 没登记的嵌套 def 会在 codegen 里被判回退 ✅（语义仍正确 ✅）。
-        if isinstance(child, (ast.AsyncFunctionDef, ast.ClassDef)) and child is not node:
+        # **函数体里的类** ✅ 已支持 ✅（源码 exec + 搬进局部 ✅；取不到源码才回退 ✅）
+        if isinstance(child, ast.AsyncFunctionDef) and child is not node:
             raise Unsupported("嵌套定义（" + type(child).__name__ + "）")
         # **lambda** ✅ 已支持 ✅（无条件/无捕获的编译成原生函数 ✅；
         # 捕获外层局部的在 codegen 里判定回退 ✅）。

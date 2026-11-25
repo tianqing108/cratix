@@ -290,10 +290,45 @@ def _nested_defs(func_node) -> list:
 
 
 def compile_module(path: Path, module_name: str | None = None, const_pool: bool = True) -> ModuleCompile:
-    """把一个 Python 模块编译成 C ✅（函数级判定 ✅）。"""
+    """把一个 Python 模块编译成 C ✅（函数级判定 ✅）。
+
+    **绝不把异常抛给调用方** ✅ —— 编译器再怎么样也不能**崩掉构建** ✅：
+    任何没预料到的异常都变成"模块级回退" ✅，并在 reason 里标明是**内部错误** ✅（方便报 bug ✅）。
+    """
+    try:
+        return _compile_module(path, module_name, const_pool)
+    except Unsupported as exc:
+        return ModuleCompile(
+            module_name=module_name or Path(path).stem,
+            init_symbol=init_symbol_for(module_name or Path(path).stem),
+            module_ok=False,
+            module_reason="未支持：" + exc.reason,
+            source_path=str(path),
+        )
+    except Exception as exc:  # noqa: BLE001 - 编译器内部的任何异常都要降级 ✅
+        return ModuleCompile(
+            module_name=module_name or Path(path).stem,
+            init_symbol=init_symbol_for(module_name or Path(path).stem),
+            module_ok=False,
+            module_reason="内部错误（请报 bug）：" + type(exc).__name__ + ": " + str(exc)[:120],
+            source_path=str(path),
+        )
+
+
+def _compile_module(path: Path, module_name: str | None = None, const_pool: bool = True) -> ModuleCompile:
+    """真正的编译实现 ✅（异常由 `compile_module` 兜底 ✅）。"""
     path = Path(path)
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+    except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        # **读不出来/解析不了** ✅ -> 明确的模块级回退 ✅（不能把异常抛给调用方 ✅）
+        return ModuleCompile(
+            module_name=module_name or path.stem,
+            init_symbol=init_symbol_for(module_name or path.stem),
+            module_ok=False,
+            module_reason="源码不是合法的 UTF-8 Python：" + type(exc).__name__,
+        )
     module_name = module_name or path.stem
     result = ModuleCompile(
         module_name=module_name,
@@ -321,16 +356,32 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
             continue  # 文档字符串 ✅ —— 无需编译 ✅
         module_stmts.append(stmt)
 
-    # **模块体控制流里的类** ✅ —— `if cond: class C: ...` 这种 ✅
-    # （顶层类走"按源码位置创建" ✅；控制流里的类就地 exec 源码 ✅ —— 语义一致 ✅）
+    # **就地 exec 的类** ✅ —— 两类 ✅：
+    # 1. 模块体控制流里的类（`if cond: class C: ...` ✅）；
+    # 2. **函数体里的类**（`def f(): class C: ...` ✅）—— 真实代码里非常多 ✅
+    #    （`functools.cmp_to_key` ✅ / `csv.sniff` ✅ / `ctypes.CFUNCTYPE` ✅ ...）
+    # 顶层类走"按源码位置创建" ✅，这两类走"就地 exec 源码" ✅（语义一致 ✅）。
+    def _register_inline_class(node, scope=None) -> None:
+        key = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        if key in result.inline_class_sources:
+            return
+        if scope is not None:
+            # **类体引用了外层局部** ✅ -> exec 在 globals 里看不见 ✅ -> 那就回退 ✅（保守 ✅）
+            used = {
+                sub.id for sub in ast.walk(node)
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+            }
+            if used & (scope.locals_ - {"__class__"}):
+                return
+        segment = _source_segment(source, node, dedent=True)
+        if segment:
+            result.inline_class_sources[key] = segment
+
     for stmt in module_stmts:
         for sub in ast.walk(stmt):
-            if not isinstance(sub, ast.ClassDef):
-                continue
-            key = (getattr(sub, "lineno", 0), getattr(sub, "col_offset", 0))
-            segment = _source_segment(source, sub, dedent=True)
-            if segment:
-                result.inline_class_sources[key] = segment
+            if isinstance(sub, ast.ClassDef):
+                _register_inline_class(sub)
+
 
     # --- 模块级绑定的名字 ✅（= 函数里的模块全局 ✅）---
     # **与黄金模型共用同一实现** ✅ —— 否则两边判定会漂移 ✅ ✅
@@ -339,6 +390,18 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     module_globals = module_bindings(tree) | {
         "__file__", "__name__", "__doc__", "__package__", "__loader__", "__spec__",
     }
+    # **函数体里的类** ✅（要等 module_globals 算好才能做作用域分析 ✅）
+    for stmt in tree.body:
+        funcs = []
+        if isinstance(stmt, ast.FunctionDef):
+            funcs = [stmt]
+        elif isinstance(stmt, ast.ClassDef):
+            funcs = [e for e in stmt.body if isinstance(e, ast.FunctionDef)]
+        for func_node in funcs:
+            func_scope = analyze_function(func_node, module_globals)
+            for sub in ast.walk(func_node):
+                if isinstance(sub, ast.ClassDef) and sub is not func_node:
+                    _register_inline_class(sub, func_scope)
     # **`from m import *`** ✅：那些名字在**编译期**就要知道 ✅（否则函数里用到会被当成闭包自由变量 ✅）。
     # 直接把模块导进来取 `__all__` / `dir()` ✅ —— 运行期本来也要导入它 ✅。
     for stmt in tree.body:
@@ -509,11 +572,12 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 # **捕获检查** ✅：lambda 读到外层局部变量必须回退 ✅（否则会变成"看不见"→ NameError ✅）
                 analysis = analyze_function(func_node, module_globals)
                 params = builder.build_params(child.args)
+                # **params 是 IR Node** ✅ -> 一律用 `.get` ✅（`params["vararg"]` 会 TypeError ✅ 实测 ✅）
                 param_names = set(params.get("names", [])) | set(params.get("kwonly", []))
                 if params.get("vararg"):
-                    param_names.add(params["vararg"])
+                    param_names.add(params.get("vararg"))
                 if params.get("kwarg"):
-                    param_names.add(params["kwarg"])
+                    param_names.add(params.get("kwarg"))
                 used = {
                     sub.id for sub in ast.walk(child)
                     if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
@@ -573,6 +637,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 closure_names=set(inner_captured),
                 package=module_name.rpartition(".")[0],
             )
+            inner_gen.inline_class_sources = dict(result.inline_class_sources)
             inner_gen.emit_binding()
             inner_gen.emit_cells_init()
             for inner_stmt in inner_built["body"]:
@@ -593,9 +658,9 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         lam_scope = Scope(name=lam_name)
         lam_scope.locals_ = set(lam_params.get("names", [])) | set(lam_params.get("kwonly", []))
         if lam_params.get("vararg"):
-            lam_scope.locals_.add(lam_params["vararg"])
+            lam_scope.locals_.add(lam_params.get("vararg"))
         if lam_params.get("kwarg"):
-            lam_scope.locals_.add(lam_params["kwarg"])
+            lam_scope.locals_.add(lam_params.get("kwarg"))
         # **有捕获就把 cell 字典做成隐藏首参** ✅
         if lam_captured:
             lam_params = {
@@ -615,6 +680,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 inner_sites=inner_sites,
                 package=module_name.rpartition(".")[0],
             )
+            lam_gen.inline_class_sources = dict(result.inline_class_sources)
             lam_gen.emit_binding()
             lam_gen.emit_cells_init()
             for lam_stmt in built_lambda["body"]:
@@ -668,6 +734,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                 inner_sites=inner_sites,
                 genexp_captures=genexp_captures,
             )
+            # **函数体里的类** ✅ 也要能查到源码 ✅
+            gen.inline_class_sources = dict(result.inline_class_sources)
             gen.emit_binding()
             gen.emit_cells_init()
             for body_stmt in built.get("body", []):
@@ -811,6 +879,7 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
                         # **类方法里的相对导入** ✅ 也要有包名 ✅
                         package=module_name.rpartition(".")[0],
                     )
+                    gen.inline_class_sources = dict(result.inline_class_sources)
                     gen.emit_binding()
                     gen.emit_cells_init()
                     for body_stmt in built.get("body", []):
@@ -917,7 +986,8 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
     # **单阶段模块** ✅ —— init 直接返回**模块对象** ✅（PyModule_New ✅）
     # → stub 的 is_def 判定为假 ✅ → 直接返回模块 ✅ → 模块体已在 init 里执行 ✅
     # → meta.json 标 exec_done ✅ → 引导模块不再调 exec_def ✅（否则会重跑 ✅）。
-    result.c_source = codegen.generate_module_single_phase(
+    try:
+        result.c_source = codegen.generate_module_single_phase(
         module_name,
         result.init_symbol,
         result.functions,
@@ -930,12 +1000,17 @@ def compile_module(path: Path, module_name: str | None = None, const_pool: bool 
         result.func_meta,
         result.genexp_sources,
         result.decorated_functions,
-        source_file=result.source_path,
-        fallback_classes=result.fallback_classes,
-        class_order=result.class_order,
-        body_marks=result.body_marks,
-        inline_class_sources=result.inline_class_sources,
-    )
+            source_file=result.source_path,
+            fallback_classes=result.fallback_classes,
+            class_order=result.class_order,
+            body_marks=result.body_marks,
+            inline_class_sources=result.inline_class_sources,
+        )
+    except Unsupported as exc:
+        # **生成期的不支持** ✅（例如池里的常量类型 ✅）-> 模块级回退 ✅ 不能崩 ✅
+        result.module_ok = False
+        result.module_reason = "代码生成：" + exc.reason
+        return result
     result.consts = consts
     return result
 
