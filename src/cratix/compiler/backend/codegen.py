@@ -541,7 +541,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
                                  decorated_functions=None, source_file="",
                                  fallback_classes=None, class_order=None,
                                  body_marks=None, inline_class_sources=None,
-                                 class_factories=None, module_annotations=None) -> str:
+                                 class_factories=None, module_annotations=None,
+                                 module_annotation_strings=None) -> str:
     """生成整个模块的 C 代码 ✅ —— **单阶段初始化** ✅（与 Cython 一致 ✅）。
 
     **为什么单阶段** ✅：
@@ -640,6 +641,22 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     # **类工厂** ✅（函数里"捕获外层局部"的类 ✅ —— 用工厂函数造出**真闭包** ✅）
     # **模块级注解** ✅ —— 走**模块 globals** 执行 ✅，CPython 会把它们写进模块的
     # `__annotations__` ✅（与源码一致 ✅）。没有注解就不发 ✅。
+    # **future 注解** ✅ -> `__annotations__` 放**字符串** ✅（与 CPython 的 PEP 563 语义一致 ✅）
+    if module_annotation_strings:
+        out.append("    {")
+        out.append("        PyObject *cratix_anns = PyDict_New();")
+        out.append("        if (cratix_anns == NULL) return -1;")
+        for _name, _src in module_annotation_strings:
+            out.append("        {")
+            out.append("            PyObject *k = PyUnicode_FromString(" + c_string(_name) + ");")
+            out.append("            PyObject *v = PyUnicode_FromString(" + c_string(_src) + ");")
+            out.append("            if (k == NULL || v == NULL) { Py_XDECREF(k); Py_XDECREF(v); Py_DECREF(cratix_anns); return -1; }")
+            out.append("            if (PyDict_SetItem(cratix_anns, k, v) < 0) { Py_DECREF(k); Py_DECREF(v); Py_DECREF(cratix_anns); return -1; }")
+            out.append("            Py_DECREF(k); Py_DECREF(v);")
+            out.append("        }")
+        out.append("        if (PyDict_SetItemString(cratix_globals, \"__annotations__\", cratix_anns) < 0) { Py_DECREF(cratix_anns); return -1; }")
+        out.append("        Py_DECREF(cratix_anns);")
+        out.append("    }")
     if module_annotations:
         out.append("    {")
         out.append("        PyObject *cratix_mann = PyRun_String("

@@ -240,7 +240,15 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 
 **实测** ✅：`try: import attr except ImportError: ok = False` -> **加载成功 ✅ ok = False** ✅；
 `pip._vendor.rich.pretty` **LOAD OK** ✅；116 项测试全绿 ✅ ✅。
-**探针至此 0 个加载失败** ✅（23 个模块 ✅ 9 个命名空间完全一致 ✅ 2 个只差 `__annotations__` ✅）。
+**探针至此 0 个加载失败** ✅（23 个模块 ✅ 9 个命名空间完全一致 ✅）。
+
+**最后 2 个差异（已修 ✅）**：future 注解模块缺 `__annotations__` ✅ ——
+CPython 在 `from __future__ import annotations` 下把注解**存成字符串** ✅（不求值 ✅）；
+我们原来"跳过求值"就**什么都没放** ✅ -> `dir()` 少一项 ✅。
+修法 ✅：按 `(名字, 注解源码)` 建一个**字符串字典**塞进 `__annotations__` ✅ ——
+既保真 ✅ 又不求值 ✅（不会再有 NameError ✅）。
+**实测** ✅：`pip._internal.cli.cmdoptions` -> **54 条注解** ✅
+（`{'help_': 'Callable[..., Option]', ...}` ✅）。
 
 ## 追加：#179 **future 注解下不要提前求值注解** ✅
 

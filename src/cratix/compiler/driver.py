@@ -72,6 +72,8 @@ class ModuleCompile:
     body_marks: list = field(default_factory=list)
     # **模块级注解** ✅（`x: int` ✅ —— 要写进模块的 `__annotations__` ✅）
     module_annotations: list = field(default_factory=list)
+    # **future 注解下的字符串形式** ✅（(名字, 注解源码) ✅）—— 保真 `__annotations__` ✅
+    module_annotation_strings: list = field(default_factory=list)
     # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
     class_order: list = field(default_factory=list)
 
@@ -680,6 +682,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             for _sub in ast.walk(_stmt):
                 if isinstance(_sub, ast.AnnAssign):
                     _ann_nodes.append(_sub)
+    # **future 注解** ✅ -> `__annotations__` 里放**字符串** ✅（CPython 的 PEP 563 语义 ✅），
+    # **不求值** ✅（求值会在模块体之前跑 ✅ -> NameError ✅）。
+    module_annotation_strings: list = []
+    if _future_annotations:
+        for _stmt in _ann_nodes:
+            if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
+                try:
+                    module_annotation_strings.append(
+                        (_stmt.target.id, ast.unparse(_stmt.annotation))
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
     for _stmt in (_ann_nodes if not _future_annotations else []):
         if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
             try:
@@ -1404,6 +1418,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         result.genexp_sources.update(module_gen.genexp_sources)
     result.body_marks = list(module_gen.stmt_marks) if module_gen is not None else []
     result.module_annotations = list(module_annotations)
+    result.module_annotation_strings = list(module_annotation_strings)
     # **类信息总表** ✅（属性槽位快路径用 ✅）—— 必须在生成函数**之后**汇总 ✅，
     # 因为那时才知道每个类最终有哪些槽位 ✅；生成函数时先用**声明好的**表 ✅。
     result.key_names = key_names
@@ -1434,6 +1449,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             body_marks=result.body_marks,
             inline_class_sources=result.inline_class_sources,
             module_annotations=module_annotations,
+            module_annotation_strings=module_annotation_strings,
         class_factories=result.class_factories,
         )
     except Unsupported as exc:
@@ -1487,6 +1503,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             class_order=module_compile.class_order,
             body_marks=module_compile.body_marks,
             module_annotations=module_compile.module_annotations,
+            module_annotation_strings=module_compile.module_annotation_strings,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")
