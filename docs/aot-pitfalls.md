@@ -223,6 +223,22 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#180 **模块级的 `try/except` 没有分派**（待修 ✅）
+
+**探针只剩 1 个加载失败** ✅：`pip._vendor.rich.pretty` -> `No module named 'attr'` ✅。
+
+**最小复现** ✅：`try: import attr except ImportError: ok = False` ✅ ->
+加载直接抛 `ModuleNotFoundError` ✅（**没被 except 接住** ✅）。
+
+**根因（已定位 ✅）**：
+- `generate_function` 里会给**每个函数**发一份 `emit_try_handlers()`（错误处按 try 栈分派 ✅，见 codegen:490 ✅）；
+- 但**模块体**（`cratix_run_body`）**没有发** ✅ -> 模块级 try 注册的帧没人分派 ✅ ->
+  异常一路冒到模块导入失败 ✅。
+
+**修法（下一轮 ✅）**：在模块 init 的 `cratix_error:` 标签后面补
+`out.extend(module_gen.emit_try_handlers())` ✅（注意别放到**正常路径**里 ✅ ——
+分派代码必须挂在错误出口 ✅）。
+
 ## 追加：#179 **future 注解下不要提前求值注解** ✅
 
 **现象** ✅：`pip._vendor.requests.models` 加载报 `NameError: name '_t' is not defined` ✅，
