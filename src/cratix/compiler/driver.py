@@ -1184,7 +1184,14 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         # （`enum` 会塞 `_member_names` ✅）；我们建类走的是 `type(name, bases, ns)` ✅
         # -> **不会调 `__prepare__`** ✅ -> `'dict' object has no attribute '_member_names'` ✅（实测 ✅）。
         # -> 这类类**整体降级成源码 exec** ✅（语义正确 ✅）。
-        _meta_base_names = {"Enum", "IntEnum", "Flag", "IntFlag", "StrEnum", "ReprEnum", "EnumMeta"}
+        # **特殊形式的"基类"** ✅：它们**不是类**（是函数/对象 ✅），靠 `__mro_entries__` 参与建类 ✅。
+        # 我们建类走"元类 + __prepare__" ✅ -> `Py_TYPE(非类基类)` 会拿到 `function` ✅
+        # -> `function() argument 'code' must be code, not str` ✅（实测：`TypedDict` ✅）。
+        # -> 这类类整体降级成源码 exec ✅。
+        _meta_base_names = {
+            "Enum", "IntEnum", "Flag", "IntFlag", "StrEnum", "ReprEnum", "EnumMeta",
+            "TypedDict", "Protocol", "NamedTuple", "Generic",
+        }
         for _base in stmt.bases:
             if isinstance(_base, ast.Name) and _base.id in _meta_base_names:
                 class_broken = "枚举基类（元类需要 __prepare__ ✅ 交给源码 exec ✅）"
