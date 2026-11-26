@@ -34,6 +34,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--package", default="pip")
+    parser.add_argument("--skip", type=int, default=0, help="跳过最大的 N 个模块（分批排查用）")
     # **`--strict`** ✅：有任何**差异**或**加载失败**就返回 1 ✅（质量门用它做硬约束 ✅）
     parser.add_argument("--strict", action="store_true", help="有差异/失败时返回非零（质量门用）")
     args = parser.parse_args()
@@ -45,7 +46,7 @@ def main() -> int:
         return 0
     root = Path(package.__file__).resolve().parent
     files = sorted(root.rglob("*.py"), key=lambda item: item.stat().st_size, reverse=True)
-    files = [item for item in files if item.name != "__init__.py"][: args.limit]
+    files = [item for item in files if item.name != "__init__.py"][args.skip: args.skip + args.limit]
 
     workdir = Path(tempfile.mkdtemp(prefix="cratix_pkgprobe_"))
     checked = matched = skipped = failed = 0
@@ -62,6 +63,8 @@ def main() -> int:
         if not mc.module_ok:
             skipped += 1
             continue
+        # **逐模块打点** ✅ —— 崩溃时靠最后一行定位是哪个模块 ✅（实测：80 个模块那次直接访问违例 ✅）
+        print("  ... " + name, flush=True)
         try:
             out_dir = workdir / name.replace(".", "_")
             out_dir.mkdir(parents=True, exist_ok=True)
