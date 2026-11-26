@@ -1380,7 +1380,10 @@ class FunctionGen:
         vararg = params.get("vararg")
         kwarg = params.get("kwarg")
         # **方法描述符模式** ✅：self 从 C 的 `self` 拿 ✅ -> 位置参数整体左移一位 ✅
-        base = 1 if (self.method_mode and names and names[0] == "self") else 0
+        # **方法的第一个参数就是实例** ✅ —— 不管它叫 `self` 还是别的名字 ✅
+        # （Python 语义 ✅；以前只认字面名 `self` ✅ -> `def total(items_self)` 会报
+        # `missing required argument` ✅ 实测 ✅）。
+        base = 1 if (self.method_mode and names) else 0
         n_pos = len(names)
 
         self.emit("/* --- 参数绑定 --- */")

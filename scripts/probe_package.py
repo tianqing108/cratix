@@ -69,10 +69,15 @@ def main() -> int:
             continue
         checked += 1
         expected = _source_names(path)
+        # **模块元数据不算差异** ✅ —— `__cached__`/`__annotate__` 之类是**导入系统**填的 ✅，
+        # 与"我们编译得对不对"无关 ✅（不排除的话会把真信号淹掉 ✅ 实测 ✅）。
+        ignore = {"__cached__", "__annotate__", "__conditional_annotations__", "__builtins__",
+                  "__loader__", "__spec__", "__file__", "__package__", "__path__"}
+        expected -= ignore
         if not expected:
             skipped += 1
             continue
-        actual = set(dir(aot_mod))
+        actual = set(dir(aot_mod)) - ignore
         extra = sorted(actual - expected)
         missing = sorted(expected - actual)
         if extra or missing:

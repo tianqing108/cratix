@@ -163,6 +163,18 @@ def check_function(node: ast.FunctionDef, scope) -> None:
     # 根因是"try 标签用了分派编号（可能重复）" ✅，改成**单调计数器**之后 ✅
     # 同一个 finally 体被内联多份也不会撞标签 ✅（实测：`pip._vendor.rich.syntax` ✅ BUILD OK ✅）。
 
+    # **`finally` 体里再出现 `try`/`with`** ✅ -> 明确回退 ✅ ——
+    # finally 体会被**内联多份** ✅（正常路径 ✅ + 每个 return/break/continue ✅），
+    # 里面的标签是**生成时就固定的文本** ✅ -> 复制几份就有几个同名标签 ✅
+    # -> `C2045 标签重定义` ✅（实测：`pip._vendor.rich.syntax` 与最小用例 ✅）。
+    # 在**前端**判最干净 ✅（这里拿到的是 AST ✅）。
+    for _child in ast.walk(node):
+        if isinstance(_child, ast.Try) and _child.finalbody:
+            for _stmt in _child.finalbody:
+                for _sub in ast.walk(_stmt):
+                    if isinstance(_sub, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
+                        raise Unsupported("finally 体里含 try/with（标签会被复制多份）")
+
     for child in ast.walk(node):
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:
