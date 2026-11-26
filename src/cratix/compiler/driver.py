@@ -660,6 +660,16 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     # **模块级注解** ✅ —— `x: int` / `x: int = 1` 都要进**模块的 `__annotations__`** ✅。
     # 以前注解被直接丢掉 ✅（`x: int` 变成 `pass` ✅）-> 真实包的 `__annotations__` 少了内容 ✅
     # （实测：`pip._internal.cli.cmdoptions` ✅ 探针报"缺少 __annotations__/annotations" ✅）。
+    # **`from __future__ import annotations`** ✅ -> 注解**不求值**（CPython 存字符串 ✅）——
+    # 我们如果照常 exec ✅ 会在**模块体还没跑**的时候求值 ✅ -> 引用尚未导入的名字 ✅
+    # -> `NameError: name '_t' is not defined` ✅（实测：`pip._vendor.requests.models` ✅）。
+    # 这种模块**跳过注解求值** ✅（语义上注解本来也不该在这时候求值 ✅）。
+    _future_annotations = any(
+        isinstance(_stmt, ast.ImportFrom)
+        and _stmt.module == "__future__"
+        and any(_alias.name == "annotations" for _alias in _stmt.names)
+        for _stmt in tree.body
+    )
     module_annotations: list = []
     # **模块体控制流里的注解也算** ✅（`if TYPE_CHECKING:` 里一堆 `x: T` ✅ 实测 ✅）——
     # 但不能进嵌套函数/类 ✅（那是它们自己的注解 ✅）。
@@ -670,7 +680,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             for _sub in ast.walk(_stmt):
                 if isinstance(_sub, ast.AnnAssign):
                     _ann_nodes.append(_sub)
-    for _stmt in _ann_nodes:
+    for _stmt in (_ann_nodes if not _future_annotations else []):
         if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
             try:
                 module_annotations.append(
@@ -1325,6 +1335,11 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                         class_broken = "类体语句：AnnAssign（目标不是简单名字）"
                         break
                     if item.value is None:
+                        # **`from __future__ import annotations`** ✅ -> 注解**不求值** ✅
+                        # （CPython 存字符串 ✅ / PEP 649 惰性 ✅）；我们**别去 exec** ✅，
+                        # 否则会在模块体跑之前就求值 ✅ -> `NameError` ✅（实测 ✅）。
+                        if _future_annotations:
+                            continue
                         # **只有注解、没有值** ✅（`x: int` ✅）—— 它**不建属性** ✅，
                         # 只往 `__annotations__` 里加一条 ✅。记下源码 ✅，建类时统一 exec 一次 ✅。
                         segment = _source_segment(source, item, dedent=True)

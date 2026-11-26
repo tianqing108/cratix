@@ -1020,6 +1020,10 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             # 现在：取第一个基类的**元类** ✅ -> 调它的 `__prepare__` ✅ -> 再调元类本身 ✅。
             out.append("        PyObject *cratix_mt = cratix_bases != NULL && PyTuple_GET_SIZE(cratix_bases) > 0")
             out.append("            ? (PyObject *)Py_TYPE(PyTuple_GET_ITEM(cratix_bases, 0)) : (PyObject *)&PyType_Type;")
+            # **探 `__prepare__` 之前先把残留异常清掉** ✅ —— 取不到是**预期情况** ✅，
+            # 但 CPython 会认为"内建方法在有异常的情况下返回了值" ✅ ->
+            # `<built-in method __prepare__ ...> returned a result with an exception set` ✅（实测 ✅）。
+            out.append("        if (PyErr_Occurred()) PyErr_Clear();")
             out.append("        PyObject *cratix_prep = PyObject_GetAttrString(cratix_mt, \"__prepare__\");")
             out.append("        if (cratix_prep != NULL) {")
             out.append("            PyObject *prep_ns = PyObject_CallFunctionObjArgs(cratix_prep, cratix_cname, cratix_bases, NULL);")
