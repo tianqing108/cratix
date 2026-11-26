@@ -34,6 +34,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--package", default="pip")
+    # **`--strict`** ✅：有任何**差异**或**加载失败**就返回 1 ✅（质量门用它做硬约束 ✅）
+    parser.add_argument("--strict", action="store_true", help="有差异/失败时返回非零（质量门用）")
     args = parser.parse_args()
 
     try:
@@ -101,6 +103,9 @@ def main() -> int:
     for name, reason in failures[:8]:
         # **失败原因要看得见** ✅ —— "加载失败 20" 这种数字**没法行动** ✅。
         print("  失败 " + name + "：" + reason)
+    if args.strict and (diffs or failed):
+        # **基线是"0 差异 / 0 失败"** ✅ —— 退步就该让门变红 ✅
+        return 1
     for name, extra, missing in diffs[:10]:
         print("  差异 " + name + "  多出=" + str(extra) + "  缺少=" + str(missing))
     return 0
