@@ -1014,7 +1014,23 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("        if (cratix_cname == NULL) { Py_DECREF(cratix_bases); return -1; }")
             out.append("        PyObject *cratix_ns = PyDict_New();")
             out.append("        if (cratix_ns == NULL) { Py_DECREF(cratix_cname); Py_DECREF(cratix_bases); return -1; }")
-            out.append("        PyObject *cls = PyObject_CallFunctionObjArgs((PyObject *)&PyType_Type, cratix_cname, cratix_bases, cratix_ns, NULL);")
+            # **走"元类 + __prepare__"的通用建类流程** ✅ —— 以前直接 `type(name, bases, ns)` ✅：
+            # ① 不调 `__prepare__`（`Enum` 需要它塞 `_member_names` ✅）；
+            # ② 不处理 `__mro_entries__`（`Generic[T]` 这类带下标的基类 ✅）。
+            # 现在：取第一个基类的**元类** ✅ -> 调它的 `__prepare__` ✅ -> 再调元类本身 ✅。
+            out.append("        PyObject *cratix_mt = cratix_bases != NULL && PyTuple_GET_SIZE(cratix_bases) > 0")
+            out.append("            ? (PyObject *)Py_TYPE(PyTuple_GET_ITEM(cratix_bases, 0)) : (PyObject *)&PyType_Type;")
+            out.append("        PyObject *cratix_prep = PyObject_GetAttrString(cratix_mt, \"__prepare__\");")
+            out.append("        if (cratix_prep != NULL) {")
+            out.append("            PyObject *prep_ns = PyObject_CallFunctionObjArgs(cratix_prep, cratix_cname, cratix_bases, NULL);")
+            out.append("            Py_DECREF(cratix_prep);")
+            out.append("            if (prep_ns == NULL) { Py_DECREF(cratix_ns); Py_DECREF(cratix_cname); Py_DECREF(cratix_bases); return -1; }")
+            out.append("            Py_DECREF(cratix_ns);")
+            out.append("            cratix_ns = prep_ns;")
+            out.append("        } else {")
+            out.append("            PyErr_Clear();")
+            out.append("        }")
+            out.append("        PyObject *cls = PyObject_CallFunctionObjArgs(cratix_mt, cratix_cname, cratix_bases, cratix_ns, NULL);")
             out.append("        Py_DECREF(cratix_ns);")
             out.append("        Py_DECREF(cratix_cname);")
             out.append("        Py_DECREF(cratix_bases);")
