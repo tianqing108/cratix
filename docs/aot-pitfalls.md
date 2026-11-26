@@ -239,6 +239,11 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
   （我们把 `.pyd` 当**顶层**模块加载 ✅ 相对导入自然失效 ✅）；
 - `requests.models`：`name '_t' is not defined` ✅ —— **真 bug** ✅（下轮查 ✅）。
 
+**探针假阳性（已修 ✅）** ✅：`module 'pip._vendor.rich' has no attribute 'errors'` ✅ ——
+我们把 `.pyd` 当**顶层**模块加载 ✅ -> 里面的 `from . import errors` 找不到父包 ✅。
+修法 ✅：加载前先 `importlib.import_module(父包)` ✅（按源码导入父包即可 ✅，
+AOT 模块里的相对导入就能解析 ✅）。
+
 **踩的坑** ✅：判据放错了位置（在 `class_broken = ""` **之前**用 ✅）->
 `UnboundLocalError` ✅ -> 两个继承语料直接挂 ✅。**变量初始化顺序**在这种长函数里很容易踩 ✅。
 

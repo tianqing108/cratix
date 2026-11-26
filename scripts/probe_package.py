@@ -64,6 +64,14 @@ def main() -> int:
             out_dir = workdir / name.replace(".", "_")
             out_dir.mkdir(parents=True, exist_ok=True)
             pyd = driver.build_pyd(mc, out_dir)
+            # **先把父包按源码导入** ✅ —— 否则 AOT 模块里的**相对导入**（`from . import x` ✅）
+            # 会失败 ✅，那是**探针假阳性** ✅ 而不是编译器的错 ✅（实测吵了好几条 ✅）。
+            parent = name.rpartition(".")[0]
+            if parent:
+                try:
+                    importlib.import_module(parent)
+                except Exception:  # noqa: BLE001 - 父包导入失败也不该中断探针
+                    pass
             aot_mod = loader.load_compiled_module(pyd, mc.init_symbol)
         except BaseException as exc:  # noqa: BLE001
             failed += 1
