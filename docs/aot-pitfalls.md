@@ -223,6 +223,23 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#174 **模块级注解要进 `__annotations__`** ✅
+
+**现象** ✅：探针报 `pip._internal.cli.cmdoptions` "缺少 `__annotations__` / `annotations`" ✅。
+
+**根因** ✅：`x: int`（无值注解）在 builder 里直接变成 **`pass`** ①，
+`x: int = 1` 变成**普通赋值** ② —— 两者都**把注解丢了** ✅。
+
+**修法** ✅：模块级收集注解**源码**（`ast.unparse(target) + ": " + ast.unparse(annotation)` ✅），
+模块 init 里用 **`PyRun_String(..., globals, globals)`** 执行一次 ✅ ——
+CPython 会自动把它们写进**模块的** `__annotations__` ✅（类体那边必须借临时类体 ✅，两者不同 ✅）。
+
+**实测** ✅：`count: int` ✅ `name: str = "x"` ✅ -> `__annotations__ == {"count": int, "name": str}` ✅。
+
+**踩的坑** ✅：把 `module_annotations` 误传到 **`FunctionGen`** 而不是 `generate_module_single_phase` ✅
+-> `TypeError: unexpected keyword argument` ✅；而且**匿名 kwarg 重复**两次 ✅
+-> `SyntaxError: keyword argument repeated` ✅。**大函数里加参数要一次改完所有调用点** ✅。
+
 ## 追加：#173 **带下标的基类**（`Generic[T]` ✅ `Protocol[T]` ✅）
 
 **现象** ✅：`type() doesn't support MRO entry resolution; use types.new_class()` ✅ ——
