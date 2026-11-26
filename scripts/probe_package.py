@@ -48,6 +48,7 @@ def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="cratix_pkgprobe_"))
     checked = matched = skipped = failed = 0
     diffs = []
+    failures = []
     for path in files:
         rel = path.relative_to(root.parent)
         name = str(rel.with_suffix("")).replace(chr(92), ".").replace("/", ".")
@@ -64,8 +65,10 @@ def main() -> int:
             out_dir.mkdir(parents=True, exist_ok=True)
             pyd = driver.build_pyd(mc, out_dir)
             aot_mod = loader.load_compiled_module(pyd, mc.init_symbol)
-        except Exception:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001
             failed += 1
+            reason = str(exc).replace(chr(10), " ")[:120]
+            failures.append((name, reason))
             continue
         checked += 1
         expected = _source_names(path)
@@ -87,6 +90,9 @@ def main() -> int:
 
     print("检查 " + str(checked) + " 个模块 ✅ / 命名空间完全一致 " + str(matched) + " ✅ / 有差异 "
           + str(len(diffs)) + " ✅ / 加载失败 " + str(failed) + " ✅ / 跳过 " + str(skipped) + " ✅")
+    for name, reason in failures[:8]:
+        # **失败原因要看得见** ✅ —— "加载失败 20" 这种数字**没法行动** ✅。
+        print("  失败 " + name + "：" + reason)
     for name, extra, missing in diffs[:10]:
         print("  差异 " + name + "  多出=" + str(extra) + "  缺少=" + str(missing))
     return 0

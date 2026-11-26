@@ -1145,6 +1145,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         # `pip._vendor.rich.console` 的 `Console.width` ✅ -> `C2084 函数已有主体` ✅）。
         # 正确语义是"**后定义的覆盖前一个**" ✅，但我们还要在**装饰器应用时**看到前一个对象 ✅
         # （`@width.setter` 依赖它 ✅）—— 复杂度不值得 ✅ -> **这个类整体降级成源码 exec** ✅。
+        # **带下标的基类** ✅（`Generic[T]` ✅ `Protocol[T]` ✅ `list[int]` ✅）——
+        # 它们不是"真正的基类" ✅，要靠 `__mro_entries__` 解析 ✅；
+        # `type(name, (base,), ns)` **不支持**这种解析 ✅ ->
+        # `type() doesn't support MRO entry resolution; use types.new_class()` ✅（实测 ✅）。
+        # -> 这类类**整体降级成源码 exec** ✅（语义正确 ✅）。
+        for _base in stmt.bases:
+            for _sub in ast.walk(_base):
+                if isinstance(_sub, ast.Subscript):
+                    class_broken = "带下标的基类（需要 __mro_entries__ ✅ 交给源码 exec ✅）"
+                    break
+            if class_broken:
+                break
         seen_method_names: set = set()
         for item in stmt.body:
             if isinstance(item, ast.FunctionDef):

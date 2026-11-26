@@ -223,6 +223,25 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#173 **带下标的基类**（`Generic[T]` ✅ `Protocol[T]` ✅）
+
+**现象** ✅：`type() doesn't support MRO entry resolution; use types.new_class()` ✅ ——
+`class X(Generic[T])` ✅ 这类**不是真基类** ✅，要靠 `__mro_entries__` 解析 ✅，
+而我们建类用的是 `type(name, (base,), ns)` ✅ -> 直接报错 ✅。
+
+**修法** ✅：基类表达式里出现**下标** ✅ -> 这个类**整体降级成源码 exec** ✅（语义正确 ✅）。
+
+**实测** ✅（探针 20 模块）✅：**加载失败 11 -> 2** ✅（`rich.text` ✅ `distro.distro` ✅
+`packaging.licenses` 等一批全部恢复 ✅）；命名空间一致 5/8 ✅。
+
+**探针里剩下的 2 个失败** ✅（已能看清原因 ✅）：
+- `rich.console`：`module 'pip._vendor.rich' has no attribute 'errors'` ✅ —— **探针假阳性** ✅
+  （我们把 `.pyd` 当**顶层**模块加载 ✅ 相对导入自然失效 ✅）；
+- `requests.models`：`name '_t' is not defined` ✅ —— **真 bug** ✅（下轮查 ✅）。
+
+**踩的坑** ✅：判据放错了位置（在 `class_broken = ""` **之前**用 ✅）->
+`UnboundLocalError` ✅ -> 两个继承语料直接挂 ✅。**变量初始化顺序**在这种长函数里很容易踩 ✅。
+
 ## 追加：#172 **把真实包的 bug 固化成回归测试** ✅（`tests/test_codegen_edges.py` ✅）
 
 6 个用例 ✅，每个都要求"**编得过 + 跑得对**" ✅（只编得过不算 ✅）：

@@ -70,6 +70,23 @@ def main() -> int:
     if exe.is_file():
         steps.append(_run("产物冒烟运行", [python, "-m", "cratix", "verify",
                                       "--config", "cratix.toml", "--zero-disk"], cwd=example))
+    # **真实第三方包探针** ✅（可选 ✅ —— 没装 pip 就自动跳过 ✅）——
+    # 覆盖率只回答"编了多少" ✅，这一步回答"**编出来的对不对**" ✅
+    # （#168~#172 的六个真 bug 全是它抓出来的 ✅）。
+    probe_cmd = [python, "scripts/probe_package.py", "--limit", "6"]
+    probe = _run("第三方包探针", probe_cmd)
+    if probe[0]:
+        steps.append(probe)
+    else:
+        # **没有可测的包时跳过** ✅ —— 不该因为"机器上没装 pip"把门判红 ✅
+        import subprocess as _sp
+
+        _check = _sp.run([python, "-c", "import pip"], capture_output=True)
+        if _check.returncode != 0:
+            print("=== 第三方包探针 ===")
+            print("  -> SKIP（没装 pip ✅）")
+        else:
+            steps.append(probe)
     if not args.skip_bench:
         bench_cmd = [python, "tests/bench/bench_aot.py", "--repeat", "5", "--history", "3"]
         if args.record:
@@ -77,7 +94,10 @@ def main() -> int:
         steps.append(_run("性能基准", bench_cmd))
 
     total = sum(elapsed for _ok, elapsed in steps)
-    failed = [title for (ok, _elapsed), title in zip(steps, ["单元测试", "构建", "冒烟", "基准"]) if not ok]
+    failed = []
+    for (ok, _elapsed), title in zip(steps, ["单元测试", "构建", "冒烟", "第三方包探针", "基准"]):
+        if not ok:
+            failed.append(title)
     print("")
     print("=" * 60)
     print("总耗时 %.1f s" % total)
