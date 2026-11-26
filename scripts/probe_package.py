@@ -14,6 +14,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+_PACKAGE_NAME = "pip"
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -30,14 +32,56 @@ def _source_names(path: Path) -> set:
     return set(dir(module))
 
 
+def _batched(limit: int, batch: int) -> int:
+    """**分批跑** ✅ —— 一次进程里加载几十个 `.pyd` 会**累积**到崩 ✅
+    （实测：80 个整批在约 40 个后访问违例 ✅；单个/5 个都正常 ✅）。
+    所以每批开一个**子进程** ✅，汇总各批的统计 ✅。"""
+    import subprocess
+
+    total_checked = total_same = total_diff = total_fail = total_skip = 0
+    skip = 0
+    while skip < limit:
+        size = min(batch, limit - skip)
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--limit", str(size),
+             "--skip", str(skip), "--package", _PACKAGE_NAME],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        for line in (proc.stdout or "").splitlines():
+            if not line.startswith("检查 "):
+                continue
+            parts = line.split()
+            try:
+                total_checked += int(parts[1])
+                total_same += int(parts[6])
+                total_diff += int(parts[9])
+                total_fail += int(parts[12])
+                total_skip += int(parts[15])
+            except (IndexError, ValueError):
+                pass
+        # **子进程崩溃也要报** ✅（不让它拖垮整批 ✅）
+        if proc.returncode != 0:
+            print("  ⚠️ 批次 skip=" + str(skip) + " 退出码 " + str(proc.returncode))
+        skip += size
+    print("合计（分批 " + str(batch) + " 个/批）✅：检查 " + str(total_checked)
+          + " / 一致 " + str(total_same) + " / 差异 " + str(total_diff)
+          + " / 失败 " + str(total_fail) + " / 跳过 " + str(total_skip))
+    return 1 if (total_diff or total_fail) else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--package", default="pip")
     parser.add_argument("--skip", type=int, default=0, help="跳过最大的 N 个模块（分批排查用）")
+    parser.add_argument("--batch", type=int, default=0, help="每批开子进程跑 N 个（避免累积崩溃）")
     # **`--strict`** ✅：有任何**差异**或**加载失败**就返回 1 ✅（质量门用它做硬约束 ✅）
     parser.add_argument("--strict", action="store_true", help="有差异/失败时返回非零（质量门用）")
     args = parser.parse_args()
+    global _PACKAGE_NAME
+    _PACKAGE_NAME = args.package
+    if args.batch and args.batch > 0:
+        return _batched(args.limit, args.batch)
 
     try:
         package = __import__(args.package)
