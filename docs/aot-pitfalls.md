@@ -223,6 +223,24 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#177 **特殊形式"基类"不是类**（`TypedDict` ✅ `Protocol` ✅）✅
+
+**现象** ✅：把建类改成"元类 + `__prepare__`"之后 ✅，`pip._vendor.distro.distro` 报
+`TypeError: function() argument 'code' must be code, not str` ✅。
+
+**根因** ✅：`class VersionDict(TypedDict)` 里的 `TypedDict` **不是类** ✅（是函数 ✅），
+它靠 `__mro_entries__` 参与建类 ✅。我们取 `Py_TYPE(第一个基类)` 当元类 ✅ ->
+拿到的是 **`function` 类型** ✅ -> 于是"调用 function(name, bases, ns)" ✅ -> 正是在**造函数** ✅
+-> 报"code 必须是 code ✅ 不是 str" ✅。
+
+**修法** ✅：这类**特殊形式**基类（`Enum` ✅ `TypedDict` ✅ `Protocol` ✅ `NamedTuple` ✅ `Generic` ✅）
+的类**整体降级成源码 exec** ✅（语义正确 ✅）。
+
+**实测** ✅：`distro.distro` **LOAD OK** ✅；`test_classes` ✅ `test_codegen_edges` ✅ 全过 ✅。
+
+**教训** ✅：`Py_TYPE(x)` 只有在 `x` 真是**类型**时才是"元类" ✅ ——
+Python 的"基类"位置允许放**非类型对象** ✅（靠 `__mro_entries__` 参与 ✅），这是个大坑 ✅。
+
 ## 追加：#176 **`from pkg import 子模块` 要回退去导入子模块** ✅
 
 **现象** ✅：探针里**一连串**失败都是同一句话 ✅ ——
