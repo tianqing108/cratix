@@ -73,7 +73,8 @@ def main() -> int:
     # **真实第三方包探针** ✅（可选 ✅ —— 没装 pip 就自动跳过 ✅）——
     # 覆盖率只回答"编了多少" ✅，这一步回答"**编出来的对不对**" ✅
     # （#168~#172 的六个真 bug 全是它抓出来的 ✅）。
-    probe_cmd = [python, "scripts/probe_package.py", "--limit", "6", "--strict"]
+    # **限 20 个、每批 10 个** ✅ —— 一批里加载太多 `.pyd` 会累积崩 ✅（见 #188 ✅）
+    probe_cmd = [python, "scripts/probe_package.py", "--limit", "20", "--batch", "10", "--strict"]
     probe = _run("第三方包探针", probe_cmd)
     if probe[0]:
         steps.append(probe)
