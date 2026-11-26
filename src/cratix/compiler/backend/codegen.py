@@ -896,6 +896,8 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             src = trampoline_factory_source("_cratix_mk_" + cls["name"] + "_" + method_name, tb_name, _gen.params)
             out.append("static const char *cratix_tb_" + c_ident(cls["name"] + "." + method_name) + " = " + c_string(src) + ";")
         out.append("")
+    # **前置声明** ✅ —— 模块定义里要引用它 ✅，而定义在后面 ✅（否则 `C2099 初始值设定项不是常量` ✅）
+    out.append("static void cratix_module_free(void *m);")
     out.append("static struct PyModuleDef cratix_module = {")
     out.append("    PyModuleDef_HEAD_INIT,")
     out.append("    " + q + module_name + q + ",")
@@ -905,8 +907,21 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("    -1,")
     out.append("    cratix_methods,")
     out.append("    NULL,")
-    out.append("    NULL, NULL, NULL")
+    # **m_free 必须清掉我们的静态指针** ✅（#188 ✅）——
+    # `cratix_globals` / `cratix_helper_ns` / `cratix_builtins` 是**借用**的静态指针 ✅，
+    # 模块释放后它们指向**已释放对象** ✅；如果关停阶段还有 Python 对象（跳板函数 ✅ 回退函数 ✅）
+    # 被 GC 调到 ✅ 就会 deref 野指针 ✅ -> `Garbage-collecting` 里的访问违例 ✅（实测 ✅）。
+    out.append("    cratix_module_free,")
+    out.append("    NULL, NULL")
     out.append("};")
+    out.append("")
+    out.append("static void cratix_module_free(void *m) {")
+    out.append("    (void)m;")
+    out.append("    cratix_globals = NULL;")
+    out.append("    cratix_helper_ns = NULL;")
+    out.append("    cratix_builtins = NULL;")
+    out.append("    cratix_builtins_module = NULL;")
+    out.append("}")
     out.append("")
     # --- 函数级回退 ✅：内嵌 marshal 后的 code object ✅ ---
     # --- 函数级回退 ✅：内嵌**函数源码** ✅ ---
