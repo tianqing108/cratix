@@ -1300,6 +1300,9 @@ class FunctionGen:
         self.int64_helpers: list[str] = []
         self.declared_attrs: set = set()
         self.try_blocks: list = []
+        # **try 标签用单调计数器** ✅ —— `try_id` 是**分派编号**（可能重复 ✅ 比如同一段
+        # finally 体被内联多份 ✅），而 C 标签必须**全函数唯一** ✅（`C2045` ✅ 实测 ✅）。
+        self.try_label_index = 0
         self.with_blocks: list = []
         # **finally 块栈** ✅ —— return/break/continue 要先把它们跑掉 ✅
         self.finally_blocks: list = []
@@ -1912,6 +1915,8 @@ class FunctionGen:
         if len(handlers) > MAX_TRY_HANDLERS:
             raise Unsupported("try 的 handler 过多")
         try_id = len(self.try_blocks)
+        label_id = self.try_label_index
+        self.try_label_index += 1
         # **handler 体单独生成** ✅ —— 放在错误处的分派里 ✅（handler 需要看见外层局部变量 ✅ ✅）；
         # 临时变量 ✅ 此时登记 ✅ → 函数级声明 ✅ ✅ 才会包含它们 ✅ ✅。
         handler_bodies = []
@@ -1951,10 +1956,10 @@ class FunctionGen:
         # **else 只在这条"正常完成"的路上跑** ✅（handler 直接跳到结束标签 ✅ -> 不跑 else ✅）
         for stmt in node.get("orelse", []):
             self.emit_stmt(stmt)
-        self.emit("    goto cratix_try_end_" + str(try_id) + ";")
+        self.emit("    goto cratix_try_end_" + str(label_id) + ";")
         self.emit("}")
         # **结束标签** ✅ —— handler 跑完后跳到这里 ✅（继续执行 ✅ ✅）
-        self.emit("cratix_try_end_" + str(try_id) + ": ;")
+        self.emit("cratix_try_end_" + str(label_id) + ": ;")
 
     def emit_finally(self, finalbody, inner) -> None:
         """**finally** ✅ —— 四条路都要跑 ✅（正常 ✅ / 异常 ✅ / return-break-continue ✅）。

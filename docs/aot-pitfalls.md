@@ -238,7 +238,13 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 但那里的节点是 **IR 节点**（不是 AST ✅）✅ -> `AttributeError: 'Node' object has no attribute '_fields'` ✅
 -> **改成"生成期上下文"判据** ✅（不依赖节点类型 ✅）。
 
-**但这一版又太严（已撤回 ✅）** ✅：改成 `_finally_depth` 上下文判据后 ✅，
+**最终修法（成功 ✅）**：**标签改用单调计数器** ✅ ——
+`try_id` 是**分派编号** ✅（同一个 finally 体被内联多份时它会重复 ✅），
+但 **C 标签必须全函数唯一** ✅。加一个 `try_label_index` 专门发标签 ✅ ->
+同一个 finally 体内联几份都不会撞 ✅ -> `pip._vendor.rich.syntax` **BUILD OK** ✅，
+而且**不需要**任何"整函数回退"的守卫 ✅（`test_12/30/31` 三项语料全部保持 AOT ✅）。
+
+**中间那版又太严（已撤回 ✅）** ✅：改成 `_finally_depth` 上下文判据后 ✅，
 `test_12_try_else_finally` / `test_30_forms_differential` / `test_31_statements_differential` **三项挂** ✅ ——
 说明它**误伤了正常的 try/finally 语料** ✅（`_finally_depth` 在生成 handler 等路径上留下了 ✅）。
 **先撤回** ✅（回到上一个绿状态 ✅），C2045 留作下一项 ✅ ——

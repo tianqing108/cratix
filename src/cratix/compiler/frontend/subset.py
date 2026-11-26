@@ -159,6 +159,10 @@ def check_function(node: ast.FunctionDef, scope) -> None:
     # （`with` 多管理器本身没问题 ✅ —— #137 的真因是**类工厂捕获了尚未赋值的变量** ✅，
     #  已在 driver 里修掉 ✅，见 pitfalls #137 ✅）
 
+    # **`finally` 体里再出现 `try`** ✅ 已经**不需要**回退了 ✅ ——
+    # 根因是"try 标签用了分派编号（可能重复）" ✅，改成**单调计数器**之后 ✅
+    # 同一个 finally 体被内联多份也不会撞标签 ✅（实测：`pip._vendor.rich.syntax` ✅ BUILD OK ✅）。
+
     for child in ast.walk(node):
         reason = UNSUPPORTED_NODES.get(type(child))
         if reason:
