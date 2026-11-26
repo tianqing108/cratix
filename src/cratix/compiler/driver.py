@@ -775,9 +775,9 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             except Unsupported as exc:
                 result.plans.append(FunctionPlan(child.name, False, exc.reason))
                 continue
-            # **同名模块级 def 也不 AOT** ✅（与顶级函数同一条规则 ✅ —— 否则 C 里重复定义 ✅）。
-            # 它们已经计入 `top_level_names` 之外的重复统计 ✅，这里只看"这个名字出现过几次" ✅。
-            if _public_counts.get(child.name, 0) > 1:
+            # **控制流里的 def 不用这条规则** ✅ —— 它们的 C 名字是 `_cratix_mdef_N`（唯一 ✅），
+            # 不会撞名 ✅（实测：`if/else` 各定义一个 `run` ✅ 编译与运行都正确 ✅）。
+            if False and _public_counts.get(child.name, 0) > 1:
                 segment = _source_segment(source, child, dedent=True)
                 if segment:
                     result.fallback_code[child.name + "#" + str(child.lineno)] = {
