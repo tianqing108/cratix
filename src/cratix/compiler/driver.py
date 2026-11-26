@@ -70,6 +70,8 @@ class ModuleCompile:
     late_captures: dict = field(default_factory=dict)
     # **模块体每条语句结束的行数** ✅（类按源码位置插入用 ✅）
     body_marks: list = field(default_factory=list)
+    # **模块级注解** ✅（`x: int` ✅ —— 要写进模块的 `__annotations__` ✅）
+    module_annotations: list = field(default_factory=list)
     # **类的源码位置** ✅（(模块体第几条语句之后, 类名, 是否回退) ✅）
     class_order: list = field(default_factory=list)
 
@@ -655,6 +657,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     inner_cells: dict = {}
     # **被内层 `nonlocal` 写过的名字** ✅（外层只住 cell 字典 ✅）
     inner_written: dict = {}
+    # **模块级注解** ✅ —— `x: int` / `x: int = 1` 都要进**模块的 `__annotations__`** ✅。
+    # 以前注解被直接丢掉 ✅（`x: int` 变成 `pass` ✅）-> 真实包的 `__annotations__` 少了内容 ✅
+    # （实测：`pip._internal.cli.cmdoptions` ✅ 探针报"缺少 __annotations__/annotations" ✅）。
+    module_annotations: list = []
+    for _stmt in list(tree.body):
+        if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
+            try:
+                module_annotations.append(
+                    ast.unparse(_stmt.target) + ": " + ast.unparse(_stmt.annotation)
+                )
+            except Exception:  # noqa: BLE001 - 反解析失败就跳过注解 ✅ 不影响主流程 ✅
+                pass
     # **模块级控制流里的 def 节点** ✅（它们的体里还可能再嵌套 ✅ —— 扫描要用 ✅）
     mdef_nodes: list = []
     # **扫描"谁里面可能有嵌套 def"** ✅ —— 顶层函数 ✅ 类方法 ✅
@@ -1346,6 +1360,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         key_names.extend(sorted(module_gen.global_names))
         result.genexp_sources.update(module_gen.genexp_sources)
     result.body_marks = list(module_gen.stmt_marks) if module_gen is not None else []
+    result.module_annotations = list(module_annotations)
     # **类信息总表** ✅（属性槽位快路径用 ✅）—— 必须在生成函数**之后**汇总 ✅，
     # 因为那时才知道每个类最终有哪些槽位 ✅；生成函数时先用**声明好的**表 ✅。
     result.key_names = key_names
@@ -1375,6 +1390,7 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             class_order=result.class_order,
             body_marks=result.body_marks,
             inline_class_sources=result.inline_class_sources,
+            module_annotations=module_annotations,
         class_factories=result.class_factories,
         )
     except Unsupported as exc:
@@ -1427,6 +1443,7 @@ def build_pyd(module_compile: ModuleCompile, out_dir: Path, python_prefix: Path 
             fallback_classes=module_compile.fallback_classes,
             class_order=module_compile.class_order,
             body_marks=module_compile.body_marks,
+            module_annotations=module_compile.module_annotations,
         )
     c_path.write_text(module_compile.c_source, encoding="utf-8", newline="")
     (out_dir / HEADER_NAME).write_text(RUNTIME_H, encoding="utf-8", newline="")
