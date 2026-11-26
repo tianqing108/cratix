@@ -2878,8 +2878,12 @@ class FunctionGen:
                     base = base.rpartition(".")[0]
                 absolute = (base + "." + module_src) if module_src else base
             if absolute == "__future__":
-                # **编译指令** ✅ —— 对我们没有运行期含义 ✅（注解不求值 ✅）
-                return
+                # **`__future__` 里的名字也要绑定** ✅ —— Python 3.14 里
+                # `from __future__ import annotations` 会**真的绑定一个 `annotations` 名字** ✅
+                # （一个 `_Feature` 对象 ✅）；以前我们直接 return ✅ -> 模块少了这个名字 ✅
+                # （实测：探针报 `pip._internal.exceptions 缺少 annotations` ✅）。
+                # 编译指令部分对我们没有运行期含义 ✅，但**名字绑定**必须照做 ✅。
+                pass
             if not absolute:
                 raise Unsupported("相对导入没有包上下文")
             key = self.new_tmp()

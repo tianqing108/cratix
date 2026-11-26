@@ -223,6 +223,19 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#178 **`from __future__ import annotations` 真的绑定名字** ✅
+
+**现象** ✅：探针报 `pip._internal.exceptions 缺少 annotations` ✅（**不是** `__annotations__` ✅）。
+
+**验证** ✅：Python 3.14 里跑一个只有 `from __future__ import annotations` 的模块 ✅ ->
+`dir(m)` 含 **`annotations`** ✅（一个 `_Feature` 对象 ✅）。
+
+**根因** ✅：我们把 `__future__` 导入当成"**纯编译指令**" ✅ 直接 `return` ✅ -> 名字没绑 ✅。
+
+**修法** ✅：编译指令部分照旧忽略 ✅，但**名字绑定照做** ✅（走正常 from-import 路径 ✅）。
+
+**实测** ✅：`pip._internal.exceptions` 现在 `'annotations' in dir(mod) == True` ✅。
+
 ## 追加：#177 **特殊形式"基类"不是类**（`TypedDict` ✅ `Protocol` ✅）✅
 
 **现象** ✅：把建类改成"元类 + `__prepare__`"之后 ✅，`pip._vendor.distro.distro` 报
