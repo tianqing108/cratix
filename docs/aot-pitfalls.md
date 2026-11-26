@@ -223,6 +223,27 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#171 **`finally` 体里再出现 `try`** ✅（`C2045 标签重定义` ✅）
+
+**现象** ✅：某个真实包模块报 `C2045: cratix_try_end_0 标签重定义` ✅。
+
+**根因** ✅：`finally` 体会被**内联多份** ✅（正常路径一份 ✅ + 每个 `return`/`break`/`continue` 各一份 ✅），
+当 finally 体里**自己还有 `try`** 时 ✅，里面的**标签**就跟着被复制 ✅ -> 同一个标签定义多次 ✅。
+
+**修法** ✅：生成 finally 体时把 `_finally_depth` 加一 ✅，
+`emit_try`/`emit_with` 看到它就**判这个函数回退** ✅（这种形状很少见 ✅ ——
+"整函数回退 + 语义正确" 比 "复制多份带标签的代码" 划算 ✅）。
+
+**踩的坑** ✅：第一版用 `ast.walk` 在 `finalbody` 里找 `try` ✅ ——
+但那里的节点是 **IR 节点**（不是 AST ✅）✅ -> `AttributeError: 'Node' object has no attribute '_fields'` ✅
+-> **改成"生成期上下文"判据** ✅（不依赖节点类型 ✅）。
+
+**但这一版又太严（已撤回 ✅）** ✅：改成 `_finally_depth` 上下文判据后 ✅，
+`test_12_try_else_finally` / `test_30_forms_differential` / `test_31_statements_differential` **三项挂** ✅ ——
+说明它**误伤了正常的 try/finally 语料** ✅（`_finally_depth` 在生成 handler 等路径上留下了 ✅）。
+**先撤回** ✅（回到上一个绿状态 ✅），C2045 留作下一项 ✅ ——
+正确的做法是"**只给 finally 体的每一份内联用独立标签**" ✅，而不是"整函数回退" ✅。
+
 ## 追加：#170 **「声明」和「清理」必须用同一个判据** ✅
 
 **现象** ✅：`pip._vendor.pygments.lexers.python` 报 `C2065: cratix_shifted 未声明` ✅。
