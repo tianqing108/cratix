@@ -703,7 +703,14 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
             out.append("    }")
     # **模块级装饰器** ✅ —— 原生实现已经是模块属性 ✅；造一个 **Python 跳板** ✅
     # （把原生函数绑成私有名 ✅ 避免自引用递归 ✅），套上装饰器 ✅ 再换回公开名 ✅。
+    # **只有真的 AOT 了的函数才需要跳板** ✅ —— 回退函数的**源码 exec 已经把装饰器套好了** ✅
+    # （再套一次就是双重装饰 ✅）；而且回退函数在这个位置**还没绑进模块字典** ✅
+    # -> 查出来是 NULL ✅ -> `cratix: decorated function missing` ✅（实测：
+    # `pip._vendor.distlib.util` 的 `@contextmanager def tempdir()` ✅ 是生成器 ✅ 走回退 ✅）。
+    aot_native_names = {getattr(gen, "func_name", "") for gen in (functions or [])}
     for func_name, decorator_sources in (decorated_functions or []):
+        if func_name not in aot_native_names:
+            continue
         raw_name = "_cratix_raw_" + func_name
         tb_name = "_cratix_dtb_" + func_name
         out.append("    {")

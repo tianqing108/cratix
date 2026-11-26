@@ -223,6 +223,20 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#175 **回退函数不该再套一层装饰器跳板** ✅
+
+**现象** ✅：`pip._vendor.distlib.util` 加载时抛 `cratix: decorated function missing` ✅。
+
+**根因** ✅：`@contextmanager def tempdir()` 是**生成器** ✅ -> 走**源码回退** ✅，
+但它在 `decorated_functions` 名单里 ✅ -> 模块 init 仍然给它造**跳板** ✅：
+
+1. 回退函数在这个位置**还没绑进模块字典** ✅ -> 查出来是 `NULL` ✅ -> 报错 ✅；
+2. 就算查到了 ✅，回退函数的**源码 exec 已经把装饰器套好了** ✅ -> 再套一次就是**双重装饰** ✅。
+
+**修法** ✅：只给**真的 AOT 了**的函数造跳板 ✅（`func_name in aot_native_names` ✅）。
+
+**实测** ✅：`distlib.util` **LOAD OK** ✅（`tempdir` 可用 ✅）。
+
 ## 追加：#174 **模块级注解要进 `__annotations__`** ✅
 
 **现象** ✅：探针报 `pip._internal.cli.cmdoptions` "缺少 `__annotations__` / `annotations`" ✅。
