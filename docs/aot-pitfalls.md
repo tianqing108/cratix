@@ -223,6 +223,24 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#176 **`from pkg import 子模块` 要回退去导入子模块** ✅
+
+**现象** ✅：探针里**一连串**失败都是同一句话 ✅ ——
+`module 'pip._vendor.rich' has no attribute 'errors'` ✅
+`module 'pip._vendor.pygments' has no attribute 'unistring'` ✅ …
+
+**根因** ✅：`from pkg import sub` 我们只做 `import pkg` + `GetAttr(pkg, "sub")` ✅，
+但 CPython 的 **fromlist 会顺手把子模块导入** ✅ -> 属性就存在了 ✅；
+我们不导入 ✅ -> `AttributeError` ✅。
+
+**修法** ✅：属性取不到时**清异常** ✅，再 `PyImport_Import("pkg.sub")` ✅ 兜底 ✅。
+
+**实测** ✅：`from pk2 import sub; sub.VALUE` -> **42** ✅。
+
+**顺带** ✅：**枚举基类**（`Enum`/`IntEnum`/`Flag`…✅）的元类要 `__prepare__` ✅，
+而 `type()` 建类**不调** `__prepare__` ✅ -> `'dict' object has no attribute '_member_names'` ✅
+-> 这类类整体源码 exec ✅（`packaging.specifiers` **LOAD OK** ✅）。
+
 ## 追加：#175 **回退函数不该再套一层装饰器跳板** ✅
 
 **现象** ✅：`pip._vendor.distlib.util` 加载时抛 `cratix: decorated function missing` ✅。
