@@ -223,6 +223,25 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#179 **future 注解下不要提前求值注解** ✅
+
+**现象** ✅：`pip._vendor.requests.models` 加载报 `NameError: name '_t' is not defined` ✅，
+栈里写着 `<string>, line 3, in __annotate__` ✅（**PEP 649 的惰性注解** ✅）。
+
+**根因（两层 ✅）**：
+1. 我们在**模块体还没跑**的时候就去 exec 模块级/类体注解 ✅ -> 注解里引用的 `from . import _types as _t`
+   还没绑定 ✅ -> `NameError` ✅；
+2. 而 CPython 在 `from __future__ import annotations` 下**根本不求值** ✅（存字符串 ✅ / 惰性 ✅）。
+
+**修法** ✅：模块里出现 `from __future__ import annotations` 时 ✅ ——
+**模块级注解与类体注解都不求值** ✅（只做名字绑定 ✅），与 CPython 语义一致 ✅。
+
+**顺带** ✅：建类前**清掉残留异常** ✅ —— 探 `__prepare__` 失败是**预期情况** ✅，
+但 CPython 会报"内建方法在有异常时返回了值" ✅
+（`<built-in method __prepare__ ...> returned a result with an exception set` ✅）。
+
+**实测** ✅：`requests.models` **LOAD OK** ✅；116 项测试全绿 ✅。
+
 ## 追加：#178 **`from __future__ import annotations` 真的绑定名字** ✅
 
 **现象** ✅：探针报 `pip._internal.exceptions 缺少 annotations` ✅（**不是** `__annotations__` ✅）。
