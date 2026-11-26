@@ -754,6 +754,11 @@ def generate_module_single_phase(module_name: str, init_symbol: str, functions: 
     out.append("    return 0;")
     if module_gen is not None:
         out.append("cratix_error:")
+        # **模块级 try/except 的分派** ✅ —— 以前只给**函数**发分派（见 generate_function ✅），
+        # **模块体漏了** ✅ -> 模块级 `try: import x except ImportError:` 的异常没人接 ✅
+        # -> 整个模块导入失败 ✅（实测：`pip._vendor.rich.pretty` 的 `import attr` ✅）。
+        # 必须挂在**错误出口** ✅（放到正常路径里会每句都跑一遍分派 ✅）。
+        out.extend(module_gen.emit_try_handlers())
         out.extend(body_cleanup)
         out.append("    return -1;")
     out.append("}")
