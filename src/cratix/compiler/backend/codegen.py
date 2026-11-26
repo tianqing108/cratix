@@ -2883,9 +2883,19 @@ class FunctionGen:
                 val = self.new_tmp()
                 self.emit(val + " = PyObject_GetAttrString(" + mod + ", " + c_string(name) + ");")
                 self.emit("if (" + val + " == NULL) {")
-                self.emit("    Py_DECREF(" + mod + ");")
-                self.emit("    " + mod + " = NULL;")
-                self.emit("    goto cratix_error;")
+                # **`from pkg import 子模块`** ✅ —— CPython 的 fromlist 会顺手导入子模块 ✅，
+                # 光取属性找不到 ✅（实测：`from pk2 import sub` -> `no attribute 'sub'` ✅）。
+                self.emit("    PyErr_Clear();")
+                sub_key = self.new_tmp()
+                self.emit("    " + sub_key + " = " + const_expr(absolute + "." + name) + ";")
+                self.emit("    if (" + sub_key + " != NULL) {")
+                self.emit("        " + val + " = PyImport_Import(" + sub_key + ");")
+                self.emit("    }")
+                self.emit("    if (" + val + " == NULL) {")
+                self.emit("        Py_DECREF(" + mod + ");")
+                self.emit("        " + mod + " = NULL;")
+                self.emit("        goto cratix_error;")
+                self.emit("    }")
                 self.emit("}")
                 self.bind_name(bind, val)
             # **子模块也能被找到** ✅（CPython 的 import fromlist 会顺手导入子模块 ✅）

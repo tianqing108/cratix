@@ -1180,6 +1180,18 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     break
             if class_broken:
                 break
+        # **枚举 / 自定义元类的基类** ✅ —— 它们的元类会调 `__prepare__` 往命名空间里塞东西 ✅
+        # （`enum` 会塞 `_member_names` ✅）；我们建类走的是 `type(name, bases, ns)` ✅
+        # -> **不会调 `__prepare__`** ✅ -> `'dict' object has no attribute '_member_names'` ✅（实测 ✅）。
+        # -> 这类类**整体降级成源码 exec** ✅（语义正确 ✅）。
+        _meta_base_names = {"Enum", "IntEnum", "Flag", "IntFlag", "StrEnum", "ReprEnum", "EnumMeta"}
+        for _base in stmt.bases:
+            if isinstance(_base, ast.Name) and _base.id in _meta_base_names:
+                class_broken = "枚举基类（元类需要 __prepare__ ✅ 交给源码 exec ✅）"
+                break
+            if isinstance(_base, ast.Attribute) and _base.attr in _meta_base_names:
+                class_broken = "枚举基类（元类需要 __prepare__ ✅ 交给源码 exec ✅）"
+                break
         seen_method_names: set = set()
         for item in stmt.body:
             if isinstance(item, ast.FunctionDef):
