@@ -223,6 +223,29 @@ C 侧只做 `PyObject_CallOneArg(工厂, 被装饰函数对象)` ✅ —— **�
 **教训** ✅：**"按名字查"是命名空间污染的根源** ✅ —— 只要把依赖改成**传对象** ✅，
 私有名就能彻底删掉 ✅；反过来 ✅，只要还有一处按名字查 ✅，那个名字就得留在 globals ✅。
 
+## 追加：#186 **元类定义也走源码 exec** ✅
+
+**现象** ✅：`pip._vendor.pygments.lexer` 报
+`descriptor '__new__' for 'LexerMeta' objects doesn't apply to a 'type' object` ✅。
+
+**最小复现与三分法** ✅（这一步很关键 ✅）：
+
+| 用例 | 结果 |
+| --- | --- |
+| `class M(type)`（只有元类 ✅） | **OK** ✅ |
+| `class M(type)` + `class A(metaclass=M)` ✅ | **FAIL** ✅ |
+| `class M(type)`（无 `__new__`）+ A + B ✅ | **OK** ✅ |
+
+-> 触发条件是"**元类里定义了 `__new__`** ✅ + 有类用它当 `metaclass`" ✅。
+
+**根因** ✅：我们造的类里 `__new__` 是 **PyCFunction** ✅，
+而 CPython 建类时把 `M.__new__` 装成 `tp_new` 直接调用 ✅ ——
+与"真 Python 函数"的绑定语义有差异 ✅，于是报那个看不懂的描述符错误 ✅。
+
+**修法** ✅：**元类定义（基类 `type`）整体降级成源码 exec** ✅（元类很少见 ✅ 语义正确优先 ✅）。
+
+**实测** ✅：三个最小用例全部 OK ✅、`pygments.lexer` **LOAD OK** ✅、116 项测试全绿（355s）✅。
+
 ## 追加：#185 **超大函数要回退** ✅（MSVC 对巨型单函数极慢 ✅）
 
 **现象** ✅：`pip._vendor.msgpack.fallback` **构建卡死** ✅（180 秒超时 ✅），

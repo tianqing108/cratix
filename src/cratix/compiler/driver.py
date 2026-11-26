@@ -1222,6 +1222,15 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
         # 我们建类走"元类 + __prepare__" ✅ -> `Py_TYPE(非类基类)` 会拿到 `function` ✅
         # -> `function() argument 'code' must be code, not str` ✅（实测：`TypedDict` ✅）。
         # -> 这类类整体降级成源码 exec ✅。
+        # **元类本身**（`class M(type)` ✅）也走源码 exec ✅ ——
+        # 我们造的类里 `__new__` 是 **PyCFunction** ✅，而 CPython 建类时把
+        # `M.__new__` 当 `tp_new` 调用 ✅ —— 与"真 Python 函数"的绑定语义有差异 ✅
+        # -> `descriptor '__new__' for 'M' objects doesn't apply to a 'type' object` ✅（实测 ✅）。
+        # 元类很少见 ✅ -> 整类回退（语义正确 ✅）。
+        for _base in stmt.bases:
+            if isinstance(_base, ast.Name) and _base.id in ("type", "Type"):
+                class_broken = "元类定义（基类 type ✅ 交给源码 exec ✅）"
+                break
         _meta_base_names = {
             "Enum", "IntEnum", "Flag", "IntFlag", "StrEnum", "ReprEnum", "EnumMeta",
             "TypedDict", "Protocol", "NamedTuple", "Generic",
