@@ -661,7 +661,16 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
     # 以前注解被直接丢掉 ✅（`x: int` 变成 `pass` ✅）-> 真实包的 `__annotations__` 少了内容 ✅
     # （实测：`pip._internal.cli.cmdoptions` ✅ 探针报"缺少 __annotations__/annotations" ✅）。
     module_annotations: list = []
+    # **模块体控制流里的注解也算** ✅（`if TYPE_CHECKING:` 里一堆 `x: T` ✅ 实测 ✅）——
+    # 但不能进嵌套函数/类 ✅（那是它们自己的注解 ✅）。
+    _ann_nodes: list = []
     for _stmt in list(tree.body):
+        _ann_nodes.append(_stmt)
+        if isinstance(_stmt, (ast.If, ast.Try, ast.For, ast.While, ast.With)):
+            for _sub in ast.walk(_stmt):
+                if isinstance(_sub, ast.AnnAssign):
+                    _ann_nodes.append(_sub)
+    for _stmt in _ann_nodes:
         if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
             try:
                 module_annotations.append(
