@@ -101,6 +101,11 @@ def main() -> int:
         else:
             matched += 1
 
+    # **退出前强制 GC** ✅ —— 探针曾在"退出时才崩"（GC 阶段 ✅）✅；
+    # 显式收一次能把崩溃点挪到有 Python 栈的位置 ✅，便于定位 ✅。
+    import gc
+
+    gc.collect()
     print("检查 " + str(checked) + " 个模块 ✅ / 命名空间完全一致 " + str(matched) + " ✅ / 有差异 "
           + str(len(diffs)) + " ✅ / 加载失败 " + str(failed) + " ✅ / 跳过 " + str(skipped) + " ✅")
     for name, reason in failures[:8]:
