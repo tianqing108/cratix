@@ -468,7 +468,9 @@ def generate_function(gen: FunctionGen) -> str:
     cleanup = []
     # **cratix_kwv 是借用引用** ✅（PyDict_GetItemWithError ✅）—— **不能 DECREF** ✅
     # （多 DECREF 一次 ✅ → 提前释放 ✅ → 后续 use-after-free ✅ → 访问违例 ✅）
-    if getattr(gen, "method_mode", False):
+    # **`cratix_shifted` 只在方法描述符模式（`base=1`）里声明** ✅ —— 无条件清理会引用**未声明变量** ✅
+    # （实测：`pip._vendor.pygments.lexers.python` ✅ `C2065` ✅）。
+    if getattr(gen, "used_shifted", False):
         cleanup.append("    Py_XDECREF(cratix_shifted);")
     cleanup.append("    Py_XDECREF(cratix_kw);")
     for name in sorted(gen.scope.locals_):
@@ -1270,6 +1272,8 @@ class FunctionGen:
         if self.inner_sites or self.lambda_captures or self.genexp_captures:
             self.int_safe = set()
         self.int64_index = 0
+        # **`cratix_shifted` 是否真的声明过** ✅（清理段要用同一个判据 ✅）
+        self.used_shifted = False
         self.cells_var = ""
         self.func_name = func_name
         # **原生方法描述符模式** ✅：`self` 从 C 的 `self` 参数拿 ✅（不再是 args[0] ✅）
@@ -1381,6 +1385,9 @@ class FunctionGen:
         self.emit("PyObject *cratix_kwv = NULL;")
         if base:
             self.emit("PyObject *cratix_shifted = NULL;")
+            # **记下"真的声明了"** ✅ —— 清理段必须和这里**完全对应** ✅
+            # （以前按 `method_mode` 判 ✅ -> 参数不叫 self 时不声明却清理 ✅ -> `C2065` ✅）
+            self.used_shifted = True
         # **全位置参数 + 无默认值** ✅ -> **绑定快路径** ✅（#155 ✅）
         # 注意：必须在**所有局部声明之后** ✅ —— 跳过一个带初始化的声明会留下未初始化变量 ✅（实测崩溃 ✅）。
         # **方法描述符（base=1）不走快路径** ✅ —— self 的绑定在下面那段 if/else 里 ✅，
