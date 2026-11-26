@@ -294,6 +294,10 @@ def _int_safe(func_node, scope) -> set:
         return set()
 
 
+# **单个函数的 C 代码上限** ✅ —— 超过就回退 ✅（MSVC 对超大函数极慢 ✅ 实测 ✅）
+MAX_FUNCTION_C_BYTES = 120 * 1024
+
+
 def _str_safe(func_node) -> set:
     """**"肯定是字符串"的局部** ✅ —— 只用于 `s = s + t` 的原地追加特化 ✅。
 
@@ -1078,6 +1082,12 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
             gen.emit_cells_init()
             for body_stmt in built.get("body", []):
                 gen.emit_stmt(body_stmt)
+            # **超大函数** ✅ -> 回退 ✅（#185 ✅）—— 一个函数的 C 超过阈值时 ✅
+            # MSVC 会**极慢甚至卡死** ✅（实测：`msgpack.fallback` 的 `Packer._pack` 单函数 235KB ✅
+            # -> 整个构建 180 秒超时 ✅）。回退后语义不变 ✅（源码 exec ✅）只是没加速 ✅。
+            _gen_size = sum(len(_line) + 1 for _line in gen.lines)
+            if _gen_size > MAX_FUNCTION_C_BYTES:
+                raise Unsupported("函数体过大（%d KB C 代码）" % (_gen_size // 1024))
         except Unsupported as exc:
             result.plans.append(FunctionPlan(stmt.name, False, exc.reason))
             # **函数级回退** ✅：把该函数的 code object marshal 后内嵌 ✅
@@ -1272,6 +1282,11 @@ def _compile_module(path: Path, module_name: str | None = None, const_pool: bool
                     gen.emit_cells_init()
                     for body_stmt in built.get("body", []):
                         gen.emit_stmt(body_stmt)
+                    # **超大方法也回退** ✅（#185 ✅）—— `msgpack` 的 `Packer._pack` 单个方法
+                    # 生成 235KB C ✅ -> MSVC 卡死 ✅（实测：构建 180 秒超时 ✅）。
+                    _gen_size = sum(len(_line) + 1 for _line in gen.lines)
+                    if _gen_size > MAX_FUNCTION_C_BYTES:
+                        raise Unsupported("方法体过大（%d KB C 代码）" % (_gen_size // 1024))
                 except Unsupported as exc:
                     result.plans.append(FunctionPlan(item.name, False, exc.reason))
                     # **类方法在类体里有缩进** ✅ -> 回退必须 dedent ✅ ✅
